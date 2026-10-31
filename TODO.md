@@ -5,8 +5,8 @@ packaging, examples, tests and CI are done; see `docs/ECOSYSTEM.md`.
 
 ## Done
 
-- PR #1 merged; `v0.1.0` tagged.
-- ESP-IDF example verified on the badge: 180x135 @ 24 FPS, 0 predicted late
+- `v1.0.0` released (first stable; `v0.1.0` was the initial listing).
+- ESP-IDF example and the Library Manager copy of `ESP32S3_Player` verified on the badge: 180x135 @ 24 FPS, 0 predicted late
   frames, colour bars scroll.
 - Arduino Library Manager: accepted (arduino/library-registry#9534).
 - Repository description and topics set.
@@ -17,10 +17,9 @@ packaging, examples, tests and CI are done; see `docs/ECOSYSTEM.md`.
 1. Espressif: when the namespace is approved, create component `rv565`
    under `elixpo` on components.espressif.com, add the trusted uploader
    (`elixpo/rv565`, workflow `publish-idf.yml`), then run
-   `gh workflow run publish-idf.yml --ref v0.1.0`. Afterwards add the tag
+   `gh workflow run publish-idf.yml --ref v1.0.0`. Afterwards add the tag
    trigger noted in the workflow.
-2. Arduino: once indexed, install RV565 from the IDE's Library Manager and
-   upload `examples/ESP32S3_Player` to the badge.
+2. Arduino: confirm the index shows 1.0.0 (`arduino-cli lib search RV565`).
 3. Optional: play a real clip by replacing `examples_idf/player/main/clip.rv565`
    with one from `tools/rv565.py encode`.
 
