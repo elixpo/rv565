@@ -103,7 +103,7 @@ def main():
     parser.add_argument("source", type=Path)
     parser.add_argument(
         "output", type=Path, nargs="?",
-        default=Path("experiments/video_dma/main/video.rv565"),
+        default=Path("benchmarks/esp32s3_video_dma/main/video.rv565"),
     )
     parser.add_argument("--start", type=float, default=0.0,
                         help="offset into the source, in seconds")

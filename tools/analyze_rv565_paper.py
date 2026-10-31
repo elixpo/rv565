@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reproduce the derived RV565 paper analyses from committed measurements.
 
-Every value printed here appears in paper/rv565.tex (Sections 6.3-6.7):
+Every value printed here appears in the RV565 paper (arXiv:2610.35935, Sections 6.3-6.7):
 the SPI wire-time bound, the inflate-latency model and its held-out error,
 the frame-independence size comparison, and the Gallery stage decomposition.
 
@@ -21,7 +21,7 @@ import zlib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MEASUREMENTS = REPO_ROOT / "paper/measurements"
+MEASUREMENTS = REPO_ROOT / "benchmarks/measurements"
 LCD_W, LCD_H, SPI_HZ = 320, 240, 40_000_000
 
 
@@ -140,7 +140,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "media", type=Path, nargs="?",
-        default=REPO_ROOT / "experiments/video_dma/main/video.rv565")
+        default=REPO_ROOT / "benchmarks/esp32s3_video_dma/main/video.rv565")
     parser.add_argument(
         "--label", default="native-dma-stripes",
         help="standalone aggregate label, e.g. bbb090-serial")

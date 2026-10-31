@@ -29,16 +29,16 @@ esac
 label=$(printf 'bbb%03d-%s' "$start" "$mode")
 
 python3 tools/encode_video_benchmark.py "$source_video" \
-  experiments/video_dma/main/video.rv565 --start "$start" --seconds 10 --fps 24
+  benchmarks/esp32s3_video_dma/main/video.rv565 --start "$start" --seconds 10 --fps 24
 (
-  cd experiments/video_dma
+  cd benchmarks/esp32s3_video_dma
   idf.py -DRV565_OVERLAP="$overlap" -DRV565_BACKLIGHT="${RV565_BACKLIGHT:-60}" -DRV565_SELFTEST=0 build
   idf.py -p "$port" flash
 )
 
 for run in $(seq -w 1 "$runs"); do
-  .venv/bin/python tools/collect_video_benchmark.py --port "$port" \
+  python3 tools/collect_video_benchmark.py --port "$port" \
     --label "$label-r$run"
 done
 python3 tools/summarize_video_benchmarks.py \
-  paper/measurements/video-benchmark-"$label"-r*.json --label "$label"
+  benchmarks/measurements/video-benchmark-"$label"-r*.json --label "$label"
