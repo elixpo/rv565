@@ -104,6 +104,14 @@ On the ESP32-S3 with 180×135 frames and a 320×240 panel, the serial path uses
 frame and worker stack). `tinfl` keeps about 11 KB on the decoding task's
 stack.
 
+## Versioning
+
+RV565 follows [semantic versioning](https://semver.org). From 1.0.0 the
+container format and the public API in `rv565.h`, `rv565_player.h` and the
+ESP32 port will not change incompatibly within 1.x. The RP2 port is
+experimental and may change in a minor release until it has been measured on
+hardware. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## Development
 
 ```bash
