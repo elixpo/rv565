@@ -1,5 +1,9 @@
 # RV565
 
+[![Arduino Library Manager](https://www.ardu-badge.com/badge/RV565.svg)](https://www.ardu-badge.com/RV565)
+[![arXiv](https://img.shields.io/badge/arXiv-2610.35935-b31b1b.svg)](https://arxiv.org/abs/2610.35935)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23543367-blue.svg)](https://doi.org/10.5281/zenodo.23543367)
+
 Frame-independent RGB565 video for microcontroller displays, with a dual-core
 decode and DMA pipeline.
 
@@ -30,8 +34,10 @@ MicroPython-Class ESP32-S3 Systems*
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Experimental, not yet measured |
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Experimental, not yet measured |
 
-Registry listings are pending; until then, clone this repository into your
-project's `components/` (ESP-IDF) or `libraries/` (Arduino) folder.
+Arduino: install *RV565* from the Library Manager, or run
+`arduino-cli lib install RV565`. The ESP Component Registry listing is
+pending; until then, clone this repository into your project's `components/`
+folder (ESP-IDF).
 
 ## Quick start
 
