@@ -24,7 +24,7 @@ This benchmark replaces MicroPython, its partition table, and OreoOS. The
 backup is the reliable route back to the exact current badge state.
 
 ```bash
-python -m esptool --chip esp32s3 --port /dev/ttyACM0 read-flash \
+python -m esptool --chip esp32s3 --port /dev/ttyACM0 read_flash \
   0x0 0x1000000 oreo-full-backup.bin
 ```
 
@@ -34,7 +34,7 @@ Keep `oreo-full-backup.bin` outside the repository.
 
 ```bash
 python3 tools/encode_video_benchmark.py /path/to/video.mp4 \
-  experiments/video_dma/main/video.rv565 --seconds 10 --fps 24
+  benchmarks/esp32s3_video_dma/main/video.rv565 --seconds 10 --fps 24
 ```
 
 The reference ten-second clip occupies about 4.1 MiB in v6 versus 11.1 MiB in
@@ -43,7 +43,7 @@ v5. The generated video and ESP-IDF build output are gitignored.
 ## 3. Build and flash only the benchmark
 
 ```bash
-cd experiments/video_dma
+cd benchmarks/esp32s3_video_dma
 idf.py set-target esp32s3
 idf.py -p /dev/ttyACM0 erase-flash flash monitor
 ```
@@ -54,12 +54,12 @@ The first completed frame enables the backlight, avoiding uninitialised LCD
 memory on startup. Capture and validate the run from the repository root:
 
 ```bash
-.venv/bin/python tools/collect_video_benchmark.py --port /dev/ttyACM0
+python3 tools/collect_video_benchmark.py --port /dev/ttyACM0
 ```
 
 The collector resets the application, waits for the complete run, verifies
 that every numbered frame arrived, computes p50/p95/p99 timing, and writes the
-raw log, frame CSV and JSON summary under `paper/measurements/`. It also hashes
+raw log, frame CSV and JSON summary under `benchmarks/measurements/`. It also hashes
 the application binary, encoded media and `sdkconfig` used for the run.
 
 ## Restore the badge exactly as it was
@@ -67,10 +67,12 @@ the application binary, encoded media and `sdkconfig` used for the run.
 Exit the monitor, put the board in download mode if necessary, then run:
 
 ```bash
-python -m esptool --chip esp32s3 --port /dev/ttyACM0 erase-flash
-python -m esptool --chip esp32s3 --port /dev/ttyACM0 write-flash \
+python -m esptool --chip esp32s3 --port /dev/ttyACM0 erase_flash
+python -m esptool --chip esp32s3 --port /dev/ttyACM0 write_flash \
   0x0 oreo-full-backup.bin
 ```
 
-Do not run `tools/deploy.py` until MicroPython has been restored: that tool
-uploads files through a MicroPython REPL and cannot recreate the firmware.
+If the board ran OreoOS, restore the backup before redeploying it: OreoOS's
+`tools/deploy.py` uploads files through the MicroPython REPL and cannot
+recreate the firmware. The commands above use esptool v4 syntax (ESP-IDF 5.5);
+esptool v5 spells them `erase-flash`, `write-flash` and `read-flash`.

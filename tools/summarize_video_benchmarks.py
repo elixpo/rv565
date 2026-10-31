@@ -13,7 +13,7 @@ import statistics
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "paper/measurements"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmarks/measurements"
 TIMING_FIELDS = ("inflate_us", "scale_us", "dma_wait_us", "lcd_us", "work_us")
 T_CRITICAL_95 = {
     1: 12.706,

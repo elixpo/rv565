@@ -23,8 +23,8 @@ except ImportError as exc:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BENCHMARK_DIR = REPO_ROOT / "experiments/video_dma"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "paper/measurements"
+BENCHMARK_DIR = REPO_ROOT / "benchmarks/esp32s3_video_dma"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmarks/measurements"
 FRAME_COLUMNS = (
     "sequence",
     "source_frame",
