@@ -35,7 +35,9 @@ jobs:
 
   arduino-compile:
     name: Arduino (${{ matrix.board.name }})
-    runs-on: ubuntu-latest
+    # compile-sketches installs Python 3.12.4, which has no build for the
+    # newer ubuntu-latest image; 24.04 has it.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
