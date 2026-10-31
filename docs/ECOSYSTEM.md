@@ -42,8 +42,9 @@ subset.
 
 - [x] ESP32 port (SPI GDMA + core-1 FreeRTOS worker) lifted from the measured benchmark.
 - [x] `idf_component.yml` (target esp32s3) and `examples_idf/player`; compiles locally with ESP-IDF 5.5.1.
-- [ ] Flash the example and confirm playback on the badge.
-- [ ] Request the `elixpo` namespace, then run the publish workflow.
+- [x] Flash the example and confirm playback on the badge (180x135 @ 24 FPS, 0 predicted late frames).
+- [x] Request the `elixpo` namespace (submitted 2026-10-31, under review).
+- [ ] Run the publish workflow once the namespace is approved.
 - [ ] Developer Portal article (discussion first in `espressif/developer-portal`; Hugo, WebP images).
 - [ ] Test and list further targets (esp32 dual-core; single-core chips use the serial path).
 
@@ -52,8 +53,8 @@ subset.
 - [x] `library.properties` (`architectures=esp32,rp2040`), `src/RV565.h` entry point.
 - [x] `examples/ESP32S3_Player` compiles locally with Arduino-ESP32 3.3.8.
 - [x] `examples/Pico2_Player` (compiled in CI).
-- [ ] Confirm the name *RV565* is free in the Library Manager index.
-- [ ] Tag `v0.1.0`, then PR the repository URL to `arduino/library-registry`.
+- [x] Confirm the name *RV565* is free in the Library Manager index.
+- [x] Tag `v0.1.0`, then PR the repository URL to `arduino/library-registry` (accepted in arduino/library-registry#9534).
 - [ ] Arduino Project Hub write-up with a video of the badge.
 
 ### 3. Raspberry Pi Pico 2
