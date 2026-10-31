@@ -30,7 +30,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: arduino/arduino-lint-action@e9a30879471dcbf7d9fe3481b26e60b652cca297 # v1
         with:
-          library-manager: submit
+          # RV565 is in the Library Manager index, so lint as an update.
+          library-manager: update
           compliance: strict
 
   arduino-compile:
