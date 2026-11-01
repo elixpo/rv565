@@ -56,9 +56,9 @@ Gives desktop users `pip install rv565`, and download counts we can quote.
 - [x] 🤖 Tests against `tests/data/testpattern.rv565` and the format spec.
 - [x] 🤖 CI job that builds the wheel; publish workflow using PyPI trusted
       publishing (no token stored).
-- [ ] 🙋 Create the PyPI project `rv565` and add the trusted publisher
+- [x] 🙋 Create the PyPI project `rv565` and add the trusted publisher
       (`elixpo/rv565`, workflow `publish-pypi.yml`). Check the name is free first.
-- [ ] 🙋 Run the publish workflow for 1.1.0.
+- [x] 🙋 Run the publish workflow for 1.1.0.
 
 ### 1.4 Online converter on oreo.elixpo
 
@@ -95,7 +95,7 @@ Tasks:
       on the page, and links back to the library and paper.
 - [ ] 🙋 Usage numbers: enable Cloudflare Web Analytics for the Pages project
       (cookieless, no code change) to see converter page views.
-- [ ] 🙋 Deploy with `./deploy --pages` and submit the sitemap in Google
+- [x] 🙋 Deploy with `./deploy --pages` and submit the sitemap in Google
       Search Console.
 
 ### 1.5 Telling people
