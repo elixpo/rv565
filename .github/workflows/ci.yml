@@ -25,6 +25,22 @@ jobs:
           python3 -I tools/rv565.py verify tests/data/testpattern.rv565
           python3 -I tools/rv565.py info tests/data/testpattern.rv565
 
+  python:
+    name: Python package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Tests without Pillow
+        run: python3 -m unittest discover -s python/tests -v
+      - name: Build, install with Pillow, test again
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet build
+          /tmp/venv/bin/python -m build python --outdir /tmp/dist
+          /tmp/venv/bin/pip install --quiet "$(ls /tmp/dist/*.whl)[pillow]"
+          cd /tmp && /tmp/venv/bin/rv565 info "$GITHUB_WORKSPACE/tests/data/testpattern.rv565"
+          /tmp/venv/bin/python -m unittest discover -s "$GITHUB_WORKSPACE/python/tests" -v
+
   arduino-lint:
     name: Arduino Library Manager lint
     runs-on: ubuntu-latest

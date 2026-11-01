@@ -19,6 +19,7 @@ files:
   exclude:
     - "benchmarks/**"
     - "tools/**"
+    - "python/**"
     - "tests/**"
     - "examples/**"
     - "examples_pico/**"
