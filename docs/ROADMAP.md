@@ -37,9 +37,9 @@ Today the ports are hard-wired to a 2.0" 320x240 landscape panel.
 Most ESP32 makers already drive their screen with TFT_eSPI or LovyanGFX. A
 `rv565_display_ops_t` adapter lets RV565 decode while their library draws.
 
-- [ ] 🤖 `examples/TFT_eSPI_Player`: display ops on top of `pushImageDMA`.
-- [ ] 🤖 `examples/LovyanGFX_Player`: same with LovyanGFX DMA writes.
-- [ ] 🤖 Add both to CI (`depends=` stays empty; the examples install their
+- [x] 🤖 `examples/TFT_eSPI_Player`: display ops on top of `pushImageDMA`.
+- [x] 🤖 `examples/LovyanGFX_Player`: same with LovyanGFX DMA writes.
+- [x] 🤖 Add both to CI (`depends=` stays empty; the examples install their
       display library in CI only).
 - [ ] 🙋 Run one of them on the badge.
 

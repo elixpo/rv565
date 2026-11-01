@@ -54,6 +54,13 @@ For another module, fill `rv565_panel_t` with its size, controller offset,
 MADCTL rotation and inversion. Only the 320x240 preset is verified on
 hardware so far; reports for other modules are welcome.
 
+## Using your display library
+
+Already drive your screen with TFT_eSPI or LovyanGFX? Keep it: RV565 decodes
+and scales, your library sends the stripes by DMA. See
+`examples/TFT_eSPI_Player` and `examples/LovyanGFX_Player` (ESP32); the
+adapter is four small functions.
+
 ## Quick start
 
 Encode a clip on your computer (needs FFmpeg), then check it:
