@@ -120,6 +120,18 @@ jobs:
             - compiler.cpp.extra_flags=${{ matrix.example.flags }}
           enable-warnings-report: true
 
+  platformio:
+    name: PlatformIO (ESP32-S3, Arduino)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build the example through library.json
+        run: |
+          python3 -m venv /tmp/pio
+          /tmp/pio/bin/pip install --quiet platformio
+          /tmp/pio/bin/pio ci examples/ESP32S3_Player --lib=. \
+            --board=esp32-s3-devkitc-1 --project-option="framework=arduino"
+
   esp-idf:
     name: ESP-IDF example (esp32s3)
     runs-on: ubuntu-latest
