@@ -20,7 +20,10 @@
 static const int PIN_SCLK = 18, PIN_MOSI = 19, PIN_CS = 17;
 static const int PIN_DC = 20, PIN_RST = 21, PIN_BL = 22;
 
-static const uint16_t PANEL_W = 320, PANEL_H = 240, STRIPE_ROWS = 24;
+// Your panel: RV565_PANEL_320X240, _240X320, _240X240, _135X240 or _240X135
+// (see rv565_panel.h), or fill an rv565_panel_t for another module.
+constexpr rv565_panel_t PANEL = RV565_PANEL_320X240;
+static const uint16_t PANEL_W = PANEL.width, PANEL_H = PANEL.height, STRIPE_ROWS = 24;
 static const size_t STRIPE_BYTES = PANEL_W * STRIPE_ROWS * 2;
 static const size_t MAX_FRAME_BYTES = 180 * 135 * 2;
 
@@ -60,7 +63,7 @@ void setup()
     player.micros = rv565_rp2_micros;
 
     const rv565_rp2_display_config_t display = {
-        0, PIN_MOSI, PIN_SCLK, PIN_CS, PIN_DC, PIN_RST, PIN_BL, 40 * 1000 * 1000,
+        0, PIN_MOSI, PIN_SCLK, PIN_CS, PIN_DC, PIN_RST, PIN_BL, 40 * 1000 * 1000, PANEL,
     };
     if ((st = rv565_rp2_display_init(&display, &player.display)) != RV565_OK) fail("display", st);
     if ((st = rv565_rp2_decoder_init(&clip, &player.decoder)) != RV565_OK) fail("decoder", st);

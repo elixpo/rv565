@@ -112,8 +112,10 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
         gpio_put(cfg->pin_rst, 1);
         sleep_ms(120);
     }
-    for (size_t i = 0; i < sizeof(RV565_ST7789_INIT) / sizeof(RV565_ST7789_INIT[0]); ++i) {
-        const rv565_st7789_step_t *s = &RV565_ST7789_INIT[i];
+    rv565_st7789_step_t steps[RV565_ST7789_STEPS];
+    const size_t count = rv565_st7789_sequence(&cfg->panel, steps);
+    for (size_t i = 0; i < count; ++i) {
+        const rv565_st7789_step_t *s = &steps[i];
         if (s->len & RV565_ST7789_DELAY) {
             command(s->cmd, NULL, 0);
             sleep_ms(s->data[0]);

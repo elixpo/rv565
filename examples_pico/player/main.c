@@ -8,6 +8,9 @@
 #include "port/rp2/rv565_rp2.h"
 #include "clip.h"
 
+/* Your panel: RV565_PANEL_320X240, _240X320, _240X240, _135X240 or
+ * _240X135 (see rv565_panel.h). PANEL_W and PANEL_H must match it. */
+#define PANEL       RV565_PANEL_320X240
 #define PANEL_W     320
 #define PANEL_H     240
 #define STRIPE_ROWS 24
@@ -51,6 +54,7 @@ int main(void)
     const rv565_rp2_display_config_t display = {
         .spi_index = 0, .pin_mosi = 19, .pin_sclk = 18, .pin_cs = 17,
         .pin_dc = 20, .pin_rst = 21, .pin_bl = 22, .clock_hz = 40 * 1000 * 1000,
+        .panel = PANEL,
     };
     if ((st = rv565_rp2_display_init(&display, &player.display)) != RV565_OK) fail("display", st);
     if ((st = rv565_rp2_decoder_init(&clip, &player.decoder)) != RV565_OK) fail("decoder", st);
