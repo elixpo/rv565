@@ -140,7 +140,7 @@ point to users: PyPI downloads, converter usage, projects by other people.
 - [x] 🤖 Muxer + encoder, so `ffmpeg -i in.mp4 -s 180x135 out.rv565` works
       and replaces our Python encoder for most users.
 - [x] 🤖 FATE test and sample files for samples.ffmpeg.org; documentation.
-- [ ] 🙋 Build FFmpeg with `contrib/ffmpeg/` (commands in its README), generate
+- [x] 🙋 Build FFmpeg with `contrib/ffmpeg/` (commands in its README), generate
       the FATE reference, test with a real clip.
 - [ ] 🙋 Submit through FFmpeg's current contribution process (mailing list
       or code.ffmpeg.org) and handle review.
