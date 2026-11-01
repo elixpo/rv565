@@ -1,7 +1,8 @@
 # TODO for Ayushman
 
 Everything below needs hardware, an account, or a decision. The library,
-packaging, examples, tests and CI are done; see `docs/ECOSYSTEM.md`.
+packaging, examples, tests and CI are done; see `docs/ECOSYSTEM.md`. The
+plan after 1.0, with every 🙋 item that needs you, is in `docs/ROADMAP.md`.
 
 ## Done
 
@@ -23,7 +24,7 @@ packaging, examples, tests and CI are done; see `docs/ECOSYSTEM.md`.
 3. Optional: play a real clip by replacing `examples_idf/player/main/clip.rv565`
    with one from `tools/rv565.py encode`.
 
-## Pico 2 (when you have the board)
+## Pico 2 (when there is budget for the board; Stage 4 of the roadmap)
 
 4. Wire an ST7789 to GP17-22 (see `examples_pico/player/main.c`), build with
    the Pico SDK or upload `examples/Pico2_Player` via Arduino-Pico, and check
