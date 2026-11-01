@@ -4,6 +4,16 @@ RV565 stores video as independently compressed frames whose decoded bytes are
 already in the native pixel format of RGB565 SPI panels. Any frame can be
 decoded on its own, so seeking is O(1) and a damaged frame cannot affect others.
 
+## Identification
+
+| | |
+| --- | --- |
+| Extension | `.rv565` |
+| MIME type | `video/x-rv565` |
+| Signature | `RV5` at offset 0, version `6` at offset 3, a frame rate of 1–30 at offset 8, and `0x78` (zlib header) at offset 16 |
+
+Signatures for `file(1)`, shared-mime-info and PRONOM are in `contrib/`.
+
 ## Layout
 
 All multi-byte integers are little-endian.

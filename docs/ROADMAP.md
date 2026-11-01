@@ -83,16 +83,18 @@ Design:
 
 Tasks:
 
-- [ ] 🤖 Shared JS module (encoder, decoder, schedule check) with a test that
-      its output matches `tools/rv565.py` byte for byte on the test pattern.
-- [ ] 🤖 Page `oreo.elixpo/rv565/convert` (OreoOS repo), in the existing
+- [x] 🤖 JS module (encoder, decoder, schedule check) with tests: decodes the
+      reference vector frame for frame, its files pass `rv565 verify`, and its
+      `clip.h` is byte-identical to the CLI's (zlib output itself differs by
+      implementation, so files are compared by decoded frames).
+- [x] 🤖 Page `oreo.elixpo/rv565/convert` (OreoOS repo), in the existing
       research style, linked from the paper page and this README.
-- [ ] 🤖 SEO: title/description aimed at what people search for ("MP4 to
+- [x] 🤖 SEO: title/description aimed at what people search for ("MP4 to
       RGB565 converter", "play video on ESP32 ST7789"), JSON-LD
       `SoftwareApplication`, Open Graph image, sitemap entry, an FAQ section
       on the page, and links back to the library and paper.
-- [ ] 🤖 Privacy-friendly counter of conversions (no cookies), so we can
-      quote usage; Cloudflare Web Analytics if it is already enabled.
+- [ ] 🙋 Usage numbers: enable Cloudflare Web Analytics for the Pages project
+      (cookieless, no code change) to see converter page views.
 - [ ] 🙋 Deploy with `./deploy --pages` and submit the sitemap in Google
       Search Console.
 
@@ -109,16 +111,18 @@ Tasks:
 
 All three rely on `docs/FORMAT.md` and its test vector.
 
-- [ ] 🤖 **libmagic (`file` command)**: magic entry for `RV5` + version byte,
+- [x] 🤖 **libmagic (`file` command)**: magic entry for `RV5` + version byte,
       printing dimensions, fps and frame count. Prepare the patch and test it
       against the `file` test suite.
-- [ ] 🙋 Send it (file's mailing list / bug tracker), from your account.
-- [ ] 🤖 **freedesktop shared-mime-info**: `video/x-rv565`, glob `*.rv565`,
+- [ ] 🙋 Send `contrib/file/0001-Add-magic-for-RV565-video.patch` to the file
+      maintainers (bugs.astron.com or the file mailing list), from your account.
+- [x] 🤖 **freedesktop shared-mime-info**: `video/x-rv565`, glob `*.rv565`,
       magic `RV5` at offset 0. Prepare the merge request.
-- [ ] 🙋 Open it on gitlab.freedesktop.org.
-- [ ] 🤖 **PRONOM** (UK National Archives format registry): fill in the
+- [ ] 🙋 Open a merge request on gitlab.freedesktop.org/xdg/shared-mime-info
+      adding the `contrib/freedesktop/rv565.xml` entry to `data/freedesktop.org.xml.in`.
+- [x] 🤖 **PRONOM** (UK National Archives format registry): fill in the
       submission (signature, spec link, sample file).
-- [ ] 🙋 Submit it.
+- [ ] 🙋 Submit `contrib/pronom/SUBMISSION.md` with the sample file.
 - [ ] 🤖 Register `.rv565` in Wikidata as a file format once one of the
       above lands (it needs a reliable source to cite).
 
