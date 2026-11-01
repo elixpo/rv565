@@ -30,7 +30,8 @@ Today the ports are hard-wired to a 2.0" 320x240 landscape panel.
       240x320 portrait, 135x240 (1.14").
 - [x] 🤖 Host test: address window and offsets for each preset.
 - [ ] 🙋 Check on the badge that default settings still play unchanged.
-- [ ] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py`, tag).
+- [ ] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py` also covering
+      `python/src/rv565/__init__.py`, tag).
 
 ### 1.2 Display-library examples
 
@@ -47,13 +48,13 @@ Most ESP32 makers already drive their screen with TFT_eSPI or LovyanGFX. A
 
 Gives desktop users `pip install rv565`, and download counts we can quote.
 
-- [ ] 🤖 Package `python/` in this repo: `rv565.encode()`, `rv565.open()`,
+- [x] 🤖 Package `python/` in this repo: `rv565.encode()`, `rv565.open()`,
       frame iterator, `info`/`verify`, and the existing CLI as the `rv565`
       console script. Pure Python + zlib; FFmpeg optional for encoding.
-- [ ] 🤖 Pillow plugin: `Image.open("clip.rv565")` with `seek()`/`n_frames`,
+- [x] 🤖 Pillow plugin: `Image.open("clip.rv565")` with `seek()`/`n_frames`,
       and `save(..., format="RV565", save_all=True)` for animations.
-- [ ] 🤖 Tests against `tests/data/testpattern.rv565` and the format spec.
-- [ ] 🤖 CI job that builds the wheel; publish workflow using PyPI trusted
+- [x] 🤖 Tests against `tests/data/testpattern.rv565` and the format spec.
+- [x] 🤖 CI job that builds the wheel; publish workflow using PyPI trusted
       publishing (no token stored).
 - [ ] 🙋 Create the PyPI project `rv565` and add the trusted publisher
       (`elixpo/rv565`, workflow `publish-pypi.yml`). Check the name is free first.

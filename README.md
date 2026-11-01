@@ -61,6 +61,12 @@ and scales, your library sends the stripes by DMA. See
 `examples/TFT_eSPI_Player` and `examples/LovyanGFX_Player` (ESP32); the
 adapter is four small functions.
 
+## Python
+
+`pip install rv565` gives the `rv565` command (encode, info, verify,
+c-array) and a small library; `pip install "rv565[pillow]"` adds a Pillow
+plugin, so `Image.open("clip.rv565")` works. See [python/](python/README.md).
+
 ## Quick start
 
 Encode a clip on your computer (needs FFmpeg), then check it:
