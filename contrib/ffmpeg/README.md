@@ -1,4 +1,4 @@
-# FFmpeg support (patch, not yet submitted)
+# FFmpeg support (patch, built and tested)
 
 `0001-avcodec-avformat-add-RV565-decoder-encoder-demuxer-a.patch` adds to
 FFmpeg:
@@ -12,8 +12,14 @@ FFmpeg:
   (needs seekable output).
 - A FATE round-trip test (`fate-lavf-rv565`), docs, Changelog and version bumps.
 
-It applies to FFmpeg master as of 2026-10-27 (e2740a3) and has **not been
-built yet**.
+Built and tested on 2026-11-01 against FFmpeg master (e2740a3):
+
+- `ffprobe` reports `rv565, rgb565be, 180x135, 24 fps` for the test vector.
+- Decoding all 24 frames, and seeking to frame 12, give byte-identical output
+  to the Python reference (SHA-256 `a095f470…14ae` and `c7342e0e…cbf3`).
+- Files written by the FFmpeg encoder pass `rv565 verify`.
+- `make fate-lavf-rv565` and `make fate-source` pass; the patch includes the
+  FATE reference `tests/ref/lavf/rv565`.
 
 ## Build and test
 
@@ -23,9 +29,7 @@ git am /path/to/rv565/contrib/ffmpeg/0001-*.patch
 ./configure --enable-zlib --disable-doc
 make -j"$(nproc)"
 
-# The patch adds the FATE test but not its reference file; generate it once:
-make fate-lavf-rv565 GEN=1
-git add tests/ref/lavf/rv565 && git commit --amend --no-edit
+make fate-lavf-rv565 fate-source
 
 # Round trip against the library's test vector and a real clip
 ./ffprobe -hide_banner /path/to/rv565/tests/data/testpattern.rv565
