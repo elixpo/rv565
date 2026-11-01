@@ -1,6 +1,7 @@
 # RV565
 
 [![Arduino Library Manager](https://www.ardu-badge.com/badge/RV565.svg)](https://www.ardu-badge.com/RV565)
+[![PyPI](https://img.shields.io/pypi/v/rv565.svg)](https://pypi.org/project/rv565/)
 [![arXiv](https://img.shields.io/badge/arXiv-2610.35935-b31b1b.svg)](https://arxiv.org/abs/2610.35935)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23543367-blue.svg)](https://doi.org/10.5281/zenodo.23543367)
 
@@ -33,6 +34,8 @@ MicroPython-Class ESP32-S3 Systems*
 | ESP32-S3, Arduino | Library Manager → *RV565* | Same code as ESP-IDF |
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Experimental, not yet measured |
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Experimental, not yet measured |
+| Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
+| Browser | [Online converter](https://oreo.elixpo.com/rv565/convert/) | No install, no upload |
 
 Arduino: install *RV565* from the Library Manager, or run
 `arduino-cli lib install RV565`. The ESP Component Registry listing is
@@ -63,9 +66,19 @@ adapter is four small functions.
 
 ## Python
 
-`pip install rv565` gives the `rv565` command (encode, info, verify,
-c-array) and a small library; `pip install "rv565[pillow]"` adds a Pillow
-plugin, so `Image.open("clip.rv565")` works. See [python/](python/README.md).
+The Python package is published on PyPI:
+[pypi.org/project/rv565](https://pypi.org/project/rv565/).
+
+```bash
+pip install rv565            # the rv565 command and library, no dependencies
+pip install "rv565[pillow]"  # plus the Pillow plugin
+```
+
+It gives the `rv565` command (encode, info, verify, c-array) and a small
+library; with Pillow, `Image.open("clip.rv565")` opens clips as animations.
+See [python/](python/README.md). No Python? Use the
+[online converter](https://oreo.elixpo.com/rv565/convert/), which runs in the
+browser.
 
 ## Quick start
 

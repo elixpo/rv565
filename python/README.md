@@ -1,5 +1,8 @@
 # rv565 for Python
 
+[![PyPI](https://img.shields.io/pypi/v/rv565.svg)](https://pypi.org/project/rv565/)
+[![Python](https://img.shields.io/pypi/pyversions/rv565.svg)](https://pypi.org/project/rv565/)
+
 Read, write and check [RV565](https://github.com/elixpo/rv565) video files:
 independently zlib-compressed RGB565 frames, the format the RV565 library
 plays at 24 FPS on ESP32-S3 SPI displays
@@ -9,6 +12,11 @@ plays at 24 FPS on ESP32-S3 SPI displays
 pip install rv565            # core and the `rv565` command, no dependencies
 pip install "rv565[pillow]"  # plus the Pillow plugin
 ```
+
+Published on PyPI: [pypi.org/project/rv565](https://pypi.org/project/rv565/).
+Prefer not to install anything? The
+[online converter](https://oreo.elixpo.com/rv565/convert/) does the same
+encoding in your browser.
 
 ## Command line
 
