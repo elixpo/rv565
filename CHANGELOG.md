@@ -3,6 +3,16 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## 1.1.0 — unreleased
+
+- Any ST7789 module: the ESP32 and RP2 display configs take an
+  `rv565_panel_t` (size, controller offset, MADCTL rotation, inversion), with
+  presets for 320x240, 240x320, 240x240, 135x240 and 240x135 in
+  `rv565_panel.h`. A zeroed panel keeps the 1.0 behaviour (320x240
+  landscape), so existing code is unchanged. Only 320x240 is verified on
+  hardware so far.
+- Examples show where to pick the panel.
+
 ## 1.0.0 — 2026-10-31
 
 First stable release. The container format (version 6) and the public API are

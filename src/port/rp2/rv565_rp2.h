@@ -5,6 +5,7 @@
 #ifndef RV565_RP2_H
 #define RV565_RP2_H
 
+#include "../../rv565_panel.h"
 #include "../../rv565_player.h"
 
 #if RV565_PORT_RP2
@@ -22,6 +23,7 @@ typedef struct {
     int pin_rst;        /* -1 if not connected */
     int pin_bl;         /* -1 if not connected */
     int clock_hz;       /* the SPI peripheral rounds to clk_peri / even divisor */
+    rv565_panel_t panel; /* e.g. RV565_PANEL_240X240; zeroed means 320x240 */
 } rv565_rp2_display_config_t;
 
 rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,

@@ -9,7 +9,8 @@ BUILD   := build
 CLIPS   ?=
 
 .PHONY: all clean
-all: $(BUILD)/test_host $(BUILD)/test_player
+all: $(BUILD)/test_host $(BUILD)/test_player $(BUILD)/test_panel
+	$(BUILD)/test_panel
 	python3 -I check_host.py $(BUILD)/test_host data/testpattern.rv565
 	$(BUILD)/test_player data/testpattern.rv565
 	@for clip in $(CLIPS); do \
@@ -21,6 +22,9 @@ $(BUILD)/test_host: test_host.c $(SRC) | $(BUILD)
 
 $(BUILD)/test_player: test_player.c $(SRC) | $(BUILD)
 	$(CC) $(CFLAGS) -I../src $^ -o $@
+
+$(BUILD)/test_panel: test_panel.c ../src/port/st7789_init.h ../src/rv565_panel.h | $(BUILD)
+	$(CC) $(CFLAGS) -I../src $< -o $@
 
 $(BUILD):
 	mkdir -p $@

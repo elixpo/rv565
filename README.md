@@ -39,6 +39,21 @@ Arduino: install *RV565* from the Library Manager, or run
 pending; until then, clone this repository into your project's `components/`
 folder (ESP-IDF).
 
+## Panels
+
+The ports drive any ST7789 module. Pick a preset from `rv565_panel.h` in the
+display config and use the same size for the player:
+
+```c
+rv565_esp32_display_config_t display = { /* pins, clock, ... */
+    .panel = RV565_PANEL_240X240,   /* 320X240 (default), 240X320, 135X240, 240X135 */
+};
+```
+
+For another module, fill `rv565_panel_t` with its size, controller offset,
+MADCTL rotation and inversion. Only the 320x240 preset is verified on
+hardware so far; reports for other modules are welcome.
+
 ## Quick start
 
 Encode a clip on your computer (needs FFmpeg), then check it:

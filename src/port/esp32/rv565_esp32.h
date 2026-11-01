@@ -4,6 +4,7 @@
 #ifndef RV565_ESP32_H
 #define RV565_ESP32_H
 
+#include "../../rv565_panel.h"
 #include "../../rv565_player.h"
 
 #if RV565_PORT_ESP32
@@ -22,6 +23,7 @@ typedef struct {
     int pin_bl;         /* -1 if not connected; driven high when ready */
     int clock_hz;       /* 40 MHz in the paper */
     size_t max_stripe_bytes;
+    rv565_panel_t panel; /* e.g. RV565_PANEL_240X240; zeroed means 320x240 */
 } rv565_esp32_display_config_t;
 
 /* Initialise SPI and the panel, and fill `ops` for the player. */

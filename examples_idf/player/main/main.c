@@ -1,4 +1,4 @@
-/* RV565 ESP-IDF example: play an embedded clip on an ST7789 320x240 panel,
+/* RV565 ESP-IDF example: play an embedded clip on an ST7789 panel (320x240 by default),
  * inflating on core 1 while core 0 scales and DMA-transfers (the paper's
  * dual-core configuration). Replace main/clip.rv565 with your own video:
  *   python3 tools/rv565.py encode input.mp4 main/clip.rv565 */
@@ -11,6 +11,9 @@
 #include "rv565_player.h"
 #include "port/esp32/rv565_esp32.h"
 
+/* Your panel: RV565_PANEL_320X240, _240X320, _240X240, _135X240 or
+ * _240X135 (see rv565_panel.h). PANEL_W and PANEL_H must match it. */
+#define PANEL       RV565_PANEL_320X240
 #define PANEL_W     320
 #define PANEL_H     240
 #define STRIPE_ROWS 24
@@ -60,6 +63,7 @@ void app_main(void)
         .host = SPI2_HOST, .pin_mosi = 11, .pin_sclk = 12, .pin_cs = 14,
         .pin_dc = 15, .pin_rst = 16, .pin_bl = 17,
         .clock_hz = 40 * 1000 * 1000, .max_stripe_bytes = stripe_bytes,
+        .panel = PANEL,
     };
     if ((st = rv565_esp32_display_init(&display, &player.display)) != RV565_OK ||
             (st = rv565_esp32_decoder_init(&clip, 1, &player.decoder)) != RV565_OK ||

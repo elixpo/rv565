@@ -1,4 +1,4 @@
-// RV565 player for the ESP32-S3 with an ST7789 320x240 SPI panel.
+// RV565 player for the ESP32-S3 with an ST7789 SPI panel (320x240 by default).
 //
 // Core 1 inflates the next frame while core 0 scales and DMA-transfers the
 // current one; this is the configuration measured at 24 FPS with zero
@@ -22,7 +22,10 @@
 static const int PIN_MOSI = 11, PIN_SCLK = 12, PIN_CS = 14;
 static const int PIN_DC = 15, PIN_RST = 16, PIN_BL = 17;
 
-static const uint16_t PANEL_W = 320, PANEL_H = 240, STRIPE_ROWS = 24;
+// Your panel: RV565_PANEL_320X240, _240X320, _240X240, _135X240 or _240X135
+// (see rv565_panel.h), or fill an rv565_panel_t for another module.
+constexpr rv565_panel_t PANEL = RV565_PANEL_320X240;
+static const uint16_t PANEL_W = PANEL.width, PANEL_H = PANEL.height, STRIPE_ROWS = 24;
 static const bool DUAL_CORE = true;
 
 static rv565_clip_t clip;
@@ -68,7 +71,7 @@ void setup()
 
     const rv565_esp32_display_config_t display = {
         SPI2_HOST, PIN_MOSI, PIN_SCLK, PIN_CS, PIN_DC, PIN_RST, PIN_BL,
-        40 * 1000 * 1000, stripe_bytes,
+        40 * 1000 * 1000, stripe_bytes, PANEL,
     };
     if ((st = rv565_esp32_display_init(&display, &player.display)) != RV565_OK) fail("display", st);
     if (DUAL_CORE && (st = rv565_esp32_decoder_init(&clip, 1, &player.decoder)) != RV565_OK) fail("decoder", st);

@@ -4,6 +4,7 @@
 #define RV565_ARDUINO_H
 
 #include "rv565.h"
+#include "rv565_panel.h"
 #include "rv565_player.h"
 
 #if RV565_PORT_ESP32

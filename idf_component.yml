@@ -1,4 +1,4 @@
-version: "1.0.0"
+version: "1.1.0"
 description: "RV565: frame-independent RGB565 video with a dual-core decode and SPI DMA pipeline (arXiv:2610.35935)"
 url: "https://github.com/elixpo/rv565"
 repository: "https://github.com/elixpo/rv565.git"

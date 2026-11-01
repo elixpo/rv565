@@ -23,12 +23,12 @@ money, or a decision).
 
 Today the ports are hard-wired to a 2.0" 320x240 landscape panel.
 
-- [ ] 🤖 Add `width`, `height`, `x_offset`, `y_offset`, `madctl` and
+- [x] 🤖 Add `width`, `height`, `x_offset`, `y_offset`, `madctl` and
       `invert` to the ESP32 and RP2 display configs. Zero means today's values,
       so 1.0 code keeps working (minor release, not breaking).
-- [ ] 🤖 Presets for common modules: 320x240 (2.0"), 240x240 (1.3"/1.54"),
+- [x] 🤖 Presets for common modules: 320x240 (2.0"), 240x240 (1.3"/1.54"),
       240x320 portrait, 135x240 (1.14").
-- [ ] 🤖 Host test: address window and offsets for each preset.
+- [x] 🤖 Host test: address window and offsets for each preset.
 - [ ] 🙋 Check on the badge that default settings still play unchanged.
 - [ ] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py`, tag).
 
