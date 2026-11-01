@@ -20,6 +20,7 @@ files:
     - "benchmarks/**"
     - "tools/**"
     - "python/**"
+    - "contrib/**"
     - "tests/**"
     - "examples/**"
     - "examples_pico/**"
