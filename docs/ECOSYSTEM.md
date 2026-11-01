@@ -12,8 +12,9 @@ and admission is decided by packaging quality rather than a maintainer's taste:
 | Arduino | Arduino Library Manager | Automated checks on a PR to `arduino/library-registry` |
 | Raspberry Pi Pico 2 | Arduino-Pico (via the Arduino library) and the Pico SDK | None for the library; reach comes through Arduino and the forum |
 
-FFmpeg, VLC, LVGL and MicroPython core wait until these three have users and
-real-world files.
+These three were the 1.0 scope. What comes next (display-library examples,
+PyPI and Pillow, the online converter, file-type registries, FFmpeg, and the
+Pico 2 measurements) is planned in [ROADMAP.md](ROADMAP.md).
 
 ## Decision: one repository, three front doors
 
