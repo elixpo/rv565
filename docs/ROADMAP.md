@@ -133,13 +133,15 @@ All three rely on `docs/FORMAT.md` and its test vector.
 FFmpeg support brings VLC, mpv, Kodi and ImageMagick with it. Go when we can
 point to users: PyPI downloads, converter usage, projects by other people.
 
-- [ ] 🤖 `libavformat/rv565dec.c`: demuxer (header, length-prefixed packets,
+- [x] 🤖 `libavformat/rv565dec.c`: demuxer (header, length-prefixed packets,
       seeking via the length table).
-- [ ] 🤖 `libavcodec/rv565.c`: decoder (zlib inflate to RGB565BE, which FFmpeg
+- [x] 🤖 `libavcodec/rv565dec.c`/`rv565enc.c`: decoder (zlib inflate to RGB565BE, which FFmpeg
       already has as a pixel format).
-- [ ] 🤖 Muxer + encoder, so `ffmpeg -i in.mp4 -s 180x135 out.rv565` works
+- [x] 🤖 Muxer + encoder, so `ffmpeg -i in.mp4 -s 180x135 out.rv565` works
       and replaces our Python encoder for most users.
-- [ ] 🤖 FATE test and sample files for samples.ffmpeg.org; documentation.
+- [x] 🤖 FATE test and sample files for samples.ffmpeg.org; documentation.
+- [ ] 🙋 Build FFmpeg with `contrib/ffmpeg/` (commands in its README), generate
+      the FATE reference, test with a real clip.
 - [ ] 🙋 Submit through FFmpeg's current contribution process (mailing list
       or code.ffmpeg.org) and handle review.
 - [ ] 🤖 Afterwards: tell VLC/mpv users it works, update the converter page.
