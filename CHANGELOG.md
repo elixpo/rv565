@@ -3,7 +3,7 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-11-01
 
 - Any ST7789 module: the ESP32 and RP2 display configs take an
   `rv565_panel_t` (size, controller offset, MADCTL rotation, inversion), with
@@ -12,6 +12,17 @@ All notable changes to RV565 are listed here. The project follows
   landscape), so existing code is unchanged. Only 320x240 is verified on
   hardware so far.
 - Examples show where to pick the panel.
+- `examples/TFT_eSPI_Player` and `examples/LovyanGFX_Player`: keep your
+  display library for the panel and use RV565 for decoding (compiled in CI,
+  not yet run on hardware).
+- Python package `rv565` (`python/`): read, write, verify and schedule-check
+  files, the `rv565` command (which `tools/rv565.py` now wraps), and a Pillow
+  plugin (`import rv565.pillow`). Published to PyPI with the same version.
+- `contrib/`: file type registration for `.rv565` (`file(1)` magic,
+  shared-mime-info `video/x-rv565`, PRONOM fields) and an FFmpeg patch
+  (decoder, encoder, demuxer, muxer), prepared for upstream submission.
+- `docs/FORMAT.md` gains an identification section (extension, MIME type,
+  signature).
 
 ## 1.0.0 — 2026-10-31
 

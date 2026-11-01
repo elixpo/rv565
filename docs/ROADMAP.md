@@ -30,7 +30,7 @@ Today the ports are hard-wired to a 2.0" 320x240 landscape panel.
       240x320 portrait, 135x240 (1.14").
 - [x] 🤖 Host test: address window and offsets for each preset.
 - [ ] 🙋 Check on the badge that default settings still play unchanged.
-- [ ] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py` also covering
+- [x] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py` also covering
       `python/src/rv565/__init__.py`, tag).
 
 ### 1.2 Display-library examples
