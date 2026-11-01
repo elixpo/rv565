@@ -29,7 +29,7 @@ Today the ports are hard-wired to a 2.0" 320x240 landscape panel.
 - [x] 🤖 Presets for common modules: 320x240 (2.0"), 240x240 (1.3"/1.54"),
       240x320 portrait, 135x240 (1.14").
 - [x] 🤖 Host test: address window and offsets for each preset.
-- [ ] 🙋 Check on the badge that default settings still play unchanged.
+- [x] 🙋 Check on the badge that default settings still play unchanged (1.1.0, 2026-11-01).
 - [x] 🤖 Release 1.1.0 (CHANGELOG, `tools/check_version.py` also covering
       `python/src/rv565/__init__.py`, tag).
 
@@ -101,9 +101,20 @@ Tasks:
 ### 1.5 Telling people
 
 - [ ] 🙋 Badge video of a real clip (Big Buck Bunny, CC BY 3.0).
-- [ ] 🤖 Drafts: Espressif Developer Portal article, Arduino Project Hub post,
+- [x] 🤖 Drafts: Espressif Developer Portal article, Arduino Project Hub post,
       Hackaday tip, r/esp32 and r/arduino posts. Each links the converter.
-- [ ] 🙋 Post them.
+- [x] 🙋 Hackaday tip sent (2026-11-01).
+- [x] 🙋 LinkedIn post for 1.1 (2026-11-01).
+- [x] 🙋 Espressif Developer Portal article proposed:
+      [developer-portal#852](https://github.com/espressif/developer-portal/discussions/852).
+- [ ] 🙋 Arduino Project Hub post (needs the badge video).
+- [x] 🤖 Awesome lists:
+      [agucova/awesome-esp#67](https://github.com/agucova/awesome-esp/pull/67),
+      [nhivp/Awesome-Embedded#92](https://github.com/nhivp/Awesome-Embedded/pull/92);
+      `s0lness/awesome-esp32` waits for the badge video (it requires hardware proof).
+- [x] 🤖 PlatformIO: the registry mirrors the Arduino library; `library.json`
+      adds frameworks, platforms and examples.
+- Reddit posts dropped: not something we can follow up on.
 
 ---
 
@@ -114,15 +125,17 @@ All three rely on `docs/FORMAT.md` and its test vector.
 - [x] 🤖 **libmagic (`file` command)**: magic entry for `RV5` + version byte,
       printing dimensions, fps and frame count. Prepare the patch and test it
       against the `file` test suite.
-- [ ] 🙋 Send `contrib/file/0001-Add-magic-for-RV565-video.patch` to the file
-      maintainers (bugs.astron.com or the file mailing list), from your account.
+- [x] 🙋 Sent to the file maintainers:
+      [bugs.astron.com #819](https://bugs.astron.com/view.php?id=819) (2026-11-01).
 - [x] 🤖 **freedesktop shared-mime-info**: `video/x-rv565`, glob `*.rv565`,
       magic `RV5` at offset 0. Prepare the merge request.
-- [ ] 🙋 Open a merge request on gitlab.freedesktop.org/xdg/shared-mime-info
-      adding the `contrib/freedesktop/rv565.xml` entry to `data/freedesktop.org.xml.in`.
+- [x] 🙋 Merge request opened:
+      [shared-mime-info!449](https://gitlab.freedesktop.org/xdg/shared-mime-info/-/merge_requests/449)
+      (2026-11-01, CI passing).
 - [x] 🤖 **PRONOM** (UK National Archives format registry): fill in the
       submission (signature, spec link, sample file).
-- [ ] 🙋 Submit `contrib/pronom/SUBMISSION.md` with the sample file.
+- [x] 🙋 Submitted:
+      [PRONOM_Research#202](https://github.com/digital-preservation/PRONOM_Research/pull/202) (2026-11-01).
 - [ ] 🤖 Register `.rv565` in Wikidata as a file format once one of the
       above lands (it needs a reliable source to cite).
 
@@ -142,8 +155,9 @@ point to users: PyPI downloads, converter usage, projects by other people.
 - [x] 🤖 FATE test and sample files for samples.ffmpeg.org; documentation.
 - [x] 🙋 Build FFmpeg with `contrib/ffmpeg/` (commands in its README), generate
       the FATE reference, test with a real clip.
-- [ ] 🙋 Submit through FFmpeg's current contribution process (mailing list
-      or code.ffmpeg.org) and handle review.
+- [x] 🙋 Submitted on code.ffmpeg.org:
+      [FFmpeg#25653](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/25653) (2026-11-01).
+- [ ] 🙋 Handle review until merged.
 - [ ] 🤖 Afterwards: tell VLC/mpv users it works, update the converter page.
 
 ---
