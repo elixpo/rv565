@@ -166,10 +166,11 @@ point to users: PyPI downloads, converter usage, projects by other people.
 
 Moved last because it needs hardware and time on the bench.
 
-- [ ] 🙋 Buy a Raspberry Pi Pico 2 and a 2.0" 320x240 ST7789 module.
-- [ ] 🤖 Measurement harness for `examples_pico/player` (per-frame timings
-      over USB serial, serial and overlap) and a script that fits the cost
-      model, matching the ESP32-S3 methodology.
+- [x] 🙋 Buy a Raspberry Pi Pico 2 and a 2.0" 320x240 ST7789 module (ordered 2026-11-02).
+- [x] 🤖 Measurement harness: `benchmarks/rp2350_video_dma` (same method and
+      output as the ESP32-S3 benchmark, 4-second windows to fit 4 MB flash),
+      `tools/run_rv565_matrix_rp2350.sh`, and `tools/fit_cost_model.py`, which
+      reproduces the paper's ESP32-S3 model from its records.
 - [ ] 🙋 Bring-up and measurement runs.
 - [ ] 🤖 RP2350 cost model in the library; drop "experimental".
 - [ ] 🙋 Follow-up paper: same format, second platform, cost model transfer.
