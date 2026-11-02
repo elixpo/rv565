@@ -144,7 +144,7 @@ jobs:
           path: examples_idf/player
 
   pico-sdk:
-    name: Pico SDK example (pico2)
+    name: Pico SDK example and benchmark (pico2)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -158,3 +158,12 @@ jobs:
         run: |
           cmake -S examples_pico/player -B build-pico -DPICO_BOARD=pico2
           cmake --build build-pico -j
+      - name: Build the RP2350 benchmark (serial and overlap)
+        env:
+          PICO_SDK_PATH: ${{ runner.temp }}/pico-sdk
+        run: |
+          for overlap in 0 1; do
+            cmake -S benchmarks/rp2350_video_dma -B build-bench-$overlap -DPICO_BOARD=pico2 \
+              -DRV565_OVERLAP=$overlap -DRV565_VIDEO=$PWD/tests/data/testpattern.rv565
+            cmake --build build-bench-$overlap -j
+          done
