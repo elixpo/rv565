@@ -151,7 +151,9 @@ jobs:
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi
       - name: Fetch Pico SDK
-        run: git clone --depth 1 --branch 2.1.1 https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+        run: |
+          git clone --depth 1 --branch 2.1.1 https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --depth 1 lib/tinyusb  # USB serial
       - name: Build
         env:
           PICO_SDK_PATH: ${{ runner.temp }}/pico-sdk

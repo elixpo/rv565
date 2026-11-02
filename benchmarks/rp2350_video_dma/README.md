@@ -38,6 +38,7 @@ Raspberry Pi Pico 2 (or Pico 2 W) and a 2.0" 320×240 ST7789 SPI module:
 ```bash
 sudo apt install cmake gcc-arm-none-eabi libnewlib-arm-none-eabi picotool
 git clone --depth 1 --branch 2.1.1 https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
+git -C ~/pico-sdk submodule update --init --depth 1 lib/tinyusb   # needed for USB serial
 export PICO_SDK_PATH=~/pico-sdk
 python3 -m pip install pyserial   # for the collector
 ```
