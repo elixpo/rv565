@@ -165,6 +165,18 @@ make -C tests CLIPS="w90.rv565 w360.rv565"       # plus your own containers
 CI builds the Arduino sketches for ESP32-S3 and Pico 2, the ESP-IDF example,
 and the Pico SDK example, and lints the library for the Arduino Library Manager.
 
+## Community
+
+- **Tried RV565 on a board or display?** Tell us how it went, working or not:
+  [report your hardware](https://github.com/elixpo/rv565/issues/new?template=hardware-report.yml).
+  Only the ESP32-S3 with a 320x240 ST7789 is verified so far, so every report
+  helps.
+- **Questions, ideas and projects** go to Elixpo's community discussions:
+  [Q&A](https://github.com/elixpo/elixpo/discussions/categories/q-a),
+  [Ideas](https://github.com/elixpo/elixpo/discussions/categories/ideas),
+  [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell).
+- **Bugs:** [open an issue](https://github.com/elixpo/rv565/issues/new?template=bug-report.yml).
+
 ## Citation
 
 ```bibtex
