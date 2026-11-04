@@ -23,6 +23,7 @@ encoding in your browser.
 ```bash
 rv565 encode input.mp4 clip.rv565 --size 180x135 --fps 24   # needs FFmpeg
 rv565 info clip.rv565        # sizes and predicted missed frames on ESP32-S3
+rv565 info --chip rp2350 clip.rv565   # ... or on a Raspberry Pi Pico 2
 rv565 verify clip.rv565
 rv565 c-array clip.rv565 clip.h   # for Arduino sketches
 ```
