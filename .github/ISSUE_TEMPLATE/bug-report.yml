@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: RV565 version
-      placeholder: e.g. 1.1.0 (Arduino), elixpo/rv565 1.1.0 (ESP-IDF), rv565 1.1.0 (PyPI)
+      placeholder: e.g. 1.2.0 (Arduino), elixpo/rv565 1.2.0 (ESP-IDF), rv565 1.2.0 (PyPI)
     validations:
       required: true
   - type: input
