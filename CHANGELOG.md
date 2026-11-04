@@ -3,7 +3,7 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
-## Unreleased
+## 1.2.0 — 2026-11-04
 
 - RP2350 cost model `RV565_COST_RP2350_180x135` (8.108 ms + 0.2446 µs/byte,
   r² 0.9984), measured on a Pico 2 with the paper's method; results in

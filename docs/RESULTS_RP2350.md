@@ -4,6 +4,9 @@ Measured 2026-11-04 with the paper's method (arXiv:2610.35935) on a second
 platform. The RP2350 runs the same container, player and stripe pipeline as
 the ESP32-S3; what changes is the chip, its clock, and the inflater.
 
+The story of the bring-up, from a blank screen to crosstalk on the DC line,
+is written up in [*The Screen Was Blank*](https://blogs.elixpo.com/elixpohere/rv565-pico-2-tweak).
+
 ## Setup
 
 | | |
