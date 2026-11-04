@@ -118,10 +118,24 @@ rv565_status_t rv565_inflate(const void *src, size_t src_len,
     if (src == NULL || dst == NULL || src_len == 0 || dst_len == 0) {
         return RV565_ERR_ARG;
     }
-    /* tinfl keeps its ~11 KB decompressor on the caller's stack. */
+#if RV565_BUNDLED_TINFL
+    /* The ~11 KB decompressor is static, not on the stack: the RP2040/RP2350
+     * core 0 stack is 2 KB, and a stack copy overflowed it in serial mode.
+     * Callers inflate one frame at a time (the player uses one core for it). */
+    static tinfl_decompressor decomp;
+    size_t in_len = src_len;
+    size_t out_len = dst_len;
+    tinfl_init(&decomp);
+    const tinfl_status status = tinfl_decompress(
+        &decomp, (const mz_uint8 *)src, &in_len, (mz_uint8 *)dst, (mz_uint8 *)dst,
+        &out_len, TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+    return (status == TINFL_STATUS_DONE && out_len == dst_len) ? RV565_OK : RV565_ERR_INFLATE;
+#else
+    /* The ESP32 ROM tinfl keeps its ~11 KB decompressor on the caller's stack. */
     const size_t written = tinfl_decompress_mem_to_mem(
         dst, dst_len, src, src_len, TINFL_FLAG_PARSE_ZLIB_HEADER);
     return written == dst_len ? RV565_OK : RV565_ERR_INFLATE;
+#endif
 }
 
 rv565_status_t rv565_decode_frame(const rv565_clip_t *clip, uint16_t i,

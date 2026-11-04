@@ -5,6 +5,10 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+- Bundled inflate (RP2 and other non-ESP32 targets) keeps its ~11 KB
+  decompressor in static memory instead of on the stack. On the RP2040/RP2350
+  core 0 has a 2 KB stack, so inflating there (serial mode, or the Pico
+  example's single-core path) overflowed it. The ESP32 ROM path is unchanged.
 - RP2 port runs on hardware: first bring-up on a Raspberry Pi Pico 2 with a
   2.0" 320x240 ST7789, 24 FPS with zero misses on the test pattern.
   - Command bytes (the init sequence and each frame's RAMWR) now go out at
