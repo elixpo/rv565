@@ -1,5 +1,7 @@
 # RP2350 (Raspberry Pi Pico 2) video benchmark
 
+Results from this harness are in [`docs/RESULTS_RP2350.md`](../../docs/RESULTS_RP2350.md).
+
 Measures RV565 on the Pico 2 with the method used for the ESP32-S3 in the
 paper (`benchmarks/esp32s3_video_dma`): two seconds of warm-up, then 30
 seconds of per-frame timings recorded in RAM and printed afterwards in the

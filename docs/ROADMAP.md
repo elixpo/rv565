@@ -173,8 +173,9 @@ Moved last because it needs hardware and time on the bench.
       reproduces the paper's ESP32-S3 model from its records.
 - [x] 🙋 Bring-up (2026-11-04): test pattern at 24 FPS, zero misses, display
       transfer at 99.4% of the 37.5 MHz wire time after two port fixes.
-- [ ] 🙋 Measurement runs on the two film windows.
-- [ ] 🤖 RP2350 cost model in the library; drop "experimental".
+- [x] 🙋 Measurement runs on the two film windows (2026-11-04, 4 × 10 runs).
+- [x] 🤖 RP2350 cost model in the library; drop "experimental" for the
+      RP2350 (`docs/RESULTS_RP2350.md`).
 - [ ] 🙋 Follow-up paper: same format, second platform, cost model transfer.
 
 ---

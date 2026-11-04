@@ -33,8 +33,9 @@ MicroPython-Class ESP32-S3 Systems*
 | --- | --- | --- |
 | ESP32-S3, ESP-IDF | `idf.py add-dependency "elixpo/rv565"` ([registry](https://components.espressif.com/components/elixpo/rv565)) | Measured in the paper |
 | ESP32-S3, Arduino | Library Manager → *RV565* | Same code as ESP-IDF |
-| RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Experimental, not yet measured |
-| RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Experimental, not yet measured |
+| RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Measured: 24 FPS dual-core ([results](docs/RESULTS_RP2350.md)) |
+| RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Same code as the Pico SDK |
+| RP2040 (Pico) | as RP2350 | Compiles; not yet run on hardware |
 | Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
 | Browser | [Online converter](https://oreo.elixpo.com/rv565/convert/) | No install, no upload |
 
@@ -129,7 +130,7 @@ src/                 portable core, player, and platform ports (Arduino src/)
   rv565.[ch]         container parsing, validation, inflate, scaling, cost model
   rv565_player.[ch]  stripe pipeline with optional second-core decoding
   port/esp32/        SPI GDMA display + FreeRTOS core-1 worker
-  port/rp2/          SPI DMA display + multicore worker (experimental)
+  port/rp2/          SPI DMA display + multicore worker
   third_party/       inflate-only miniz (used where no ROM inflater exists)
 examples/            Arduino sketches (ESP32-S3, Pico 2)
 examples_idf/        ESP-IDF example project
@@ -151,9 +152,9 @@ stack.
 
 RV565 follows [semantic versioning](https://semver.org). From 1.0.0 the
 container format and the public API in `rv565.h`, `rv565_player.h` and the
-ESP32 port will not change incompatibly within 1.x. The RP2 port is
-experimental and may change in a minor release until its cost model has been
-measured; it runs on a Pico 2 since 2026-11-04. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+ESP32 and RP2 ports will not change incompatibly within 1.x. The RP2 port is
+measured on the RP2350; on the RP2040 it compiles but has not yet run on
+hardware. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 

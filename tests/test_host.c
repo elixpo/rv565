@@ -90,6 +90,12 @@ int main(int argc, char **argv)
     printf("schedule serial late %u worst %.1f max_payload %u\n", report.late_frames, report.worst_frame_us, report.max_payload);
     rv565_check_schedule(&clip, &RV565_COST_ESP32S3_180x135, 31312.0f, 1, &report);
     printf("schedule overlap late %u worst %.1f\n", report.late_frames, report.worst_frame_us);
+    /* RP2350 measured: 33.419 ms transfer. The test pattern's 256-byte frames
+     * inflate in about 8.17 ms, so even the serial path just fits 41.667 ms. */
+    rv565_check_schedule(&clip, &RV565_COST_RP2350_180x135, 33419.0f, 0, &report);
+    EXPECT(report.late_frames == 0 && report.worst_frame_us < 41667.0f, "RP2350 model: test pattern fits serially");
+    EXPECT(rv565_predict_inflate_us(&RV565_COST_RP2350_180x135, 30000) + 33419.0f > 41667.0f,
+           "RP2350 model: a 30 KB film frame is late serially");
 
     rv565_pacer_t pacer;
     rv565_pacer_start(&pacer, &clip.header, 0xFFFFF000u); /* exercise timer wrap */

@@ -22,7 +22,7 @@ from pathlib import Path
 
 __all__ = [
     "RV565Error", "Header", "Clip", "CostModel", "ScheduleReport",
-    "COST_ESP32S3_180x135", "open", "write", "encode_frames",
+    "COST_ESP32S3_180x135", "COST_RP2350_180x135", "open", "write", "encode_frames",
     "rgb888_to_rgb565be", "rgb565be_to_rgb888",
 ]
 
@@ -177,6 +177,10 @@ class ScheduleReport:
 # Pooled fit from the RV565 paper: ESP32-S3 at 240 MHz, ROM tinfl, 180x135
 # frames. Refit for other chips, clocks or frame sizes.
 COST_ESP32S3_180x135 = CostModel(4858.0, 0.1515)
+
+# Pooled fit on a Raspberry Pi Pico 2: RP2350 at 150 MHz, bundled tinfl, clip in
+# XIP flash, 180x135 frames (docs/RESULTS_RP2350.md in the library repository).
+COST_RP2350_180x135 = CostModel(8108.1, 0.2446)
 
 
 def open(source):  # noqa: A001 - mirrors the module-level open() idiom
