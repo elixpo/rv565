@@ -5,6 +5,14 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+- RP2350 cost model `RV565_COST_RP2350_180x135` (8.108 ms + 0.2446 µs/byte,
+  r² 0.9984), measured on a Pico 2 with the paper's method; results in
+  `docs/RESULTS_RP2350.md`. Dual-core playback runs at 24 FPS with zero
+  misses on both film windows; the serial path cannot (every frame late).
+- The RP2 port is no longer experimental on the RP2350 and joins the 1.x
+  compatibility promise; on the RP2040 it compiles but is not yet run.
+- Python: `COST_RP2350_180x135`, and `rv565 info --chip esp32s3|rp2350` picks
+  the cost model and that chip's measured display transfer.
 - Bundled inflate (RP2 and other non-ESP32 targets) keeps its ~11 KB
   decompressor in static memory instead of on the stack. On the RP2040/RP2350
   core 0 has a 2 KB stack, so inflating there (serial mode, or the Pico

@@ -26,7 +26,8 @@ plan after 1.0, with every 🙋 item that needs you, is in `docs/ROADMAP.md`.
 
 4. Done 2026-11-04: bring-up on a Pico 2, test pattern at 24 FPS (see
    `benchmarks/rp2350_video_dma/README.md`, *Wiring for 37.5 MHz*).
-5. Measure with the paper's methodology and record a cost model for RP2350.
+5. Done 2026-11-04: measured with the paper's method; cost model in the
+   library (`docs/RESULTS_RP2350.md`).
 
 ## Write-ups
 

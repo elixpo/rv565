@@ -124,6 +124,12 @@ typedef struct {
  * chips, clocks or frame sizes with the paper's analysis script. */
 extern const rv565_cost_model_t RV565_COST_ESP32S3_180x135;
 
+/* Pooled fit on a Raspberry Pi Pico 2: RP2350 at 150 MHz, bundled tinfl, clip
+ * read through the XIP flash cache, 180x135 frames decoded into SRAM, serial
+ * path. With dual-core decoding, core-1 inflation measured 1.2-1.4 ms slower
+ * (the cores contend). See docs/RESULTS_RP2350.md. */
+extern const rv565_cost_model_t RV565_COST_RP2350_180x135;
+
 static inline float rv565_predict_inflate_us(const rv565_cost_model_t *m,
                                              uint32_t payload_len)
 {

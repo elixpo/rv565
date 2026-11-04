@@ -73,6 +73,11 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(report.late_frames, 0)
         self.assertAlmostEqual(report.worst_frame_us, 31312.0)
 
+    def test_rp2350_model(self):
+        model = rv565.COST_RP2350_180x135
+        self.assertLess(model.predict(256) + 33419.0, 41667.0)      # test pattern fits
+        self.assertGreater(model.predict(30000) + 33419.0, 41667.0)  # a film frame does not
+
     def test_pixel_conversion(self):
         rgb = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0])
         be = rv565.rgb888_to_rgb565be(rgb)

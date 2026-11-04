@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import COST_ESP32S3_180x135, HEADER, VERSION, RV565Error, open as open_clip, write
+from . import COST_ESP32S3_180x135, COST_RP2350_180x135, HEADER, VERSION, RV565Error, open as open_clip, write
 
 
 def parse_size(text):
@@ -62,6 +62,13 @@ def cmd_encode(args):
         count, width, height, args.fps, args.output, Path(args.output).stat().st_size))
 
 
+# Cost model and measured 320x240 display transfer for each measured chip.
+CHIPS = {
+    "esp32s3": (COST_ESP32S3_180x135, 31312.0, "ESP32-S3"),   # 40 MHz SPI
+    "rp2350": (COST_RP2350_180x135, 33419.0, "RP2350"),       # 37.5 MHz SPI
+}
+
+
 def cmd_info(args):
     clip = open_clip(args.file)
     h, sizes = clip.header, clip.payload_sizes()
@@ -75,10 +82,13 @@ def cmd_info(args):
         min(sizes), sum(sizes) / len(sizes), max(sizes)))
     if (h.width, h.height) != (180, 135):
         print("schedule  cost model fitted for 180x135; refit before trusting it")
+    model, transfer_us, name = CHIPS[args.chip]
+    if args.transfer_us is not None:
+        transfer_us = args.transfer_us
     for label, overlap in (("serial", False), ("overlap", True)):
-        r = clip.check_schedule(COST_ESP32S3_180x135, args.transfer_us, overlap)
-        print("schedule  %-7s worst %.2f ms, %d/%d frames late at %d FPS (ESP32-S3 model)" % (
-            label, r.worst_frame_us / 1e3, r.late_frames, h.frames, h.fps))
+        r = clip.check_schedule(model, transfer_us, overlap)
+        print("schedule  %-7s worst %.2f ms, %d/%d frames late at %d FPS (%s model)" % (
+            label, r.worst_frame_us / 1e3, r.late_frames, h.frames, h.fps, name))
 
 
 def cmd_verify(args):
@@ -141,8 +151,11 @@ def main(argv=None):
 
     p = sub.add_parser("info", help="print header, sizes and a schedule prediction")
     p.add_argument("file", type=Path)
-    p.add_argument("--transfer-us", type=float, default=31312.0,
-                   help="display transfer per frame (31312 us: 320x240 at 40 MHz SPI)")
+    p.add_argument("--chip", choices=sorted(CHIPS), default="esp32s3",
+                   help="cost model and measured display transfer to predict with")
+    p.add_argument("--transfer-us", type=float, default=None,
+                   help="override the display transfer per frame (ESP32-S3 31312 us, "
+                        "RP2350 33419 us for 320x240)")
     p.set_defaults(func=cmd_info)
 
     p = sub.add_parser("verify", help="check that every frame inflates to its RGB565 size")

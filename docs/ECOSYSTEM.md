@@ -61,9 +61,9 @@ subset.
 ### 3. Raspberry Pi Pico 2
 
 - [x] RP2 port (SPI DMA + core-1 worker with a 24 KiB stack) and Pico SDK example.
-- [ ] Bring up on a Pico 2 + ST7789; confirm the image and colours.
-- [ ] Measure W90/W360, serial vs overlap, with the paper's methodology.
-- [ ] Refit the cost model for RP2350 (no ROM inflater) and add it next to the ESP32-S3 model.
+- [x] Bring up on a Pico 2 + ST7789; confirm the image and colours (2026-11-04).
+- [x] Measure W90/W360, serial vs overlap, with the paper's methodology.
+- [x] Refit the cost model for RP2350 (no ROM inflater) and add it next to the ESP32-S3 model.
 - [ ] Post results in the Raspberry Pi forums; consider a follow-up paper (second platform answers a stated limitation).
 
 ## Positioning

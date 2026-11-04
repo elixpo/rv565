@@ -9,6 +9,7 @@
 #endif
 
 const rv565_cost_model_t RV565_COST_ESP32S3_180x135 = { 4858.0f, 0.1515f };
+const rv565_cost_model_t RV565_COST_RP2350_180x135 = { 8108.1f, 0.2446f };
 
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
