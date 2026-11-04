@@ -20,18 +20,36 @@ Differences from the ESP32-S3 setup, all reported in the output:
 
 ## Hardware
 
-Raspberry Pi Pico 2 (or Pico 2 W) and a 2.0" 320×240 ST7789 SPI module:
+Raspberry Pi Pico 2 (or Pico 2 W) and a 2.0" 320×240 ST7789 SPI module.
+Physical pin numbers count with the USB port at the top: the right-hand
+column runs from pin 40 (top) down to pin 21.
 
-| Display | Pico 2 pin |
-| --- | --- |
-| VCC | 3V3 (pin 36) |
-| GND | GND (pin 38) |
-| SCL / SCK | GP18 |
-| SDA / MOSI | GP19 |
-| CS | GP17 |
-| DC | GP20 |
-| RST | GP21 |
-| BL | GP22 |
+| Display | Pico 2 | Pin |
+| --- | --- | --- |
+| VCC | VBUS, 5 V (modules with an onboard 3.3 V regulator, as most 2.0" ones have) or 3V3 (OUT) (modules without one) | 40 or 36 |
+| GND | GND | 38, or 23 beside the signal pins |
+| SCL / SCK | GP18 | 24 |
+| SDA / MOSI | GP19 | 25 |
+| CS | GP17 | 22 |
+| DC | GP20 | 26 |
+| RST | GP21 | 27 |
+| BL / EN / BLK (backlight) | GP22 | 29 |
+| TE | not connected | |
+
+### Wiring for 37.5 MHz
+
+The first Pico 2 bring-up (2026-11-04) showed the backlight but no image
+until the wiring was improved: long breadboard jumpers ring at 37.5 MHz and
+the panel misreads the clock. What made it work:
+
+- short wires for SCL, SDA, CS and DC;
+- a 33 Ω resistor in series with SCL, at the Pico end (22–100 Ω works);
+- a ground wire run beside SCL to GND pin 23.
+
+`st7789_test.py` (in this directory) checks the wiring without the C build: flash
+MicroPython for the Pico 2, then `mpremote connect /dev/ttyACM0 run
+st7789_test.py`. It fills the panel red, green and blue and draws four bars at
+1 MHz; change `baudrate=` in the script to try faster rates.
 
 ## Prerequisites
 
@@ -104,8 +122,8 @@ records (4.858 ms + 0.1515 µs/byte, r² 0.9987).
 
 | Symptom | Likely cause |
 | --- | --- |
-| Backlight on, nothing drawn | Loose SCK/MOSI/DC wire, or the module needs 5 V on VCC |
+| Backlight on, nothing drawn | Long wires or a loose SCK/MOSI/CS/DC wire (see *Wiring for 37.5 MHz*; check with `st7789_test.py`), or the module needs 5 V on VCC |
 | Colours inverted (white shows black) | Non-IPS panel: set `.invert = 0` in the panel (use a custom `rv565_panel_t`) |
 | Image shifted or wrapped | Different module size or offset: pick another preset |
-| Noise or tearing streaks | Long jumper wires at 37.5 MHz: lower `.clock_hz` to 20 MHz to confirm |
+| Noise, or an image that starts and then vanishes | Signal ringing at 37.5 MHz: add the series resistor on SCL; `.clock_hz = 25 MHz` confirms the rest works (too slow for 24 FPS full screen) |
 | Collector times out | Wrong port (`ls /dev/ttyACM*`), or the Pico is still in BOOTSEL mode |

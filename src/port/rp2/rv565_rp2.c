@@ -11,10 +11,12 @@
 #include "../st7789_init.h"
 
 #define CORE1_STACK_WORDS (24 * 1024 / 4) /* tinfl keeps ~11 KB on the stack */
+#define RV565_RP2_COMMAND_HZ (10u * 1000u * 1000u)
 
 static struct {
     spi_inst_t *spi;
     rv565_rp2_display_config_t cfg;
+    unsigned command_hz;
     int dma;
 } disp;
 
@@ -39,10 +41,12 @@ static void begin_frame(void *ctx)
 {
     (void)ctx;
     const uint8_t ramwr = RV565_ST7789_RAMWR;
+    spi_set_baudrate(disp.spi, disp.command_hz);
     gpio_put(disp.cfg.pin_cs, 0);
     gpio_put(disp.cfg.pin_dc, 0);
     spi_bytes(&ramwr, 1);
     gpio_put(disp.cfg.pin_dc, 1);
+    spi_set_baudrate(disp.spi, (unsigned)disp.cfg.clock_hz);
 }
 
 /* The player keeps at most one stripe in flight when it queues the next, so
@@ -87,8 +91,13 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
     disp.cfg = *cfg;
     disp.spi = cfg->spi_index == 0 ? spi0 : spi1;
 
-    spi_init(disp.spi, (unsigned)cfg->clock_hz);
-    spi_set_format(disp.spi, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    /* Command bytes (the init sequence and each frame's RAMWR) go out at a
+     * safe rate: at tens of MHz the panel misreads them, measured on a Pico 2.
+     * Pixel data runs at the full rate. */
+    disp.command_hz = cfg->clock_hz < RV565_RP2_COMMAND_HZ
+        ? (unsigned)cfg->clock_hz : RV565_RP2_COMMAND_HZ;
+    spi_init(disp.spi, disp.command_hz);
+    spi_set_format(disp.spi, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
     gpio_set_function(cfg->pin_mosi, GPIO_FUNC_SPI);
     gpio_set_function(cfg->pin_sclk, GPIO_FUNC_SPI);
     init_output(cfg->pin_cs, 1);
@@ -123,6 +132,7 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
             command(s->cmd, s->data, s->len);
         }
     }
+    spi_set_baudrate(disp.spi, (unsigned)cfg->clock_hz);
 
     ops->ctx = NULL;
     ops->begin_frame = begin_frame;

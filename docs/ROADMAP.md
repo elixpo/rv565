@@ -171,7 +171,9 @@ Moved last because it needs hardware and time on the bench.
       output as the ESP32-S3 benchmark, 4-second windows to fit 4 MB flash),
       `tools/run_rv565_matrix_rp2350.sh`, and `tools/fit_cost_model.py`, which
       reproduces the paper's ESP32-S3 model from its records.
-- [ ] 🙋 Bring-up and measurement runs.
+- [x] 🙋 Bring-up (2026-11-04): test pattern at 24 FPS, zero misses, display
+      transfer at 99.4% of the 37.5 MHz wire time after two port fixes.
+- [ ] 🙋 Measurement runs on the two film windows.
 - [ ] 🤖 RP2350 cost model in the library; drop "experimental".
 - [ ] 🙋 Follow-up paper: same format, second platform, cost model transfer.
 

@@ -152,8 +152,8 @@ stack.
 RV565 follows [semantic versioning](https://semver.org). From 1.0.0 the
 container format and the public API in `rv565.h`, `rv565_player.h` and the
 ESP32 port will not change incompatibly within 1.x. The RP2 port is
-experimental and may change in a minor release until it has been measured on
-hardware. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+experimental and may change in a minor release until its cost model has been
+measured; it runs on a Pico 2 since 2026-11-04. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 

@@ -22,12 +22,10 @@ plan after 1.0, with every 🙋 item that needs you, is in `docs/ROADMAP.md`.
 3. Optional: play a real clip by replacing `examples_idf/player/main/clip.rv565`
    with one from `tools/rv565.py encode`.
 
-## Pico 2 (when there is budget for the board; Stage 4 of the roadmap)
+## Pico 2 (Stage 4 of the roadmap)
 
-4. Wire an ST7789 to GP17-22 (see `examples_pico/player/main.c`), build with
-   the Pico SDK or upload `examples/Pico2_Player` via Arduino-Pico, and check
-   the image. Expect to adjust SPI pins or the clock; the RP2350 port has only
-   been compiled, never run.
+4. Done 2026-11-04: bring-up on a Pico 2, test pattern at 24 FPS (see
+   `benchmarks/rp2350_video_dma/README.md`, *Wiring for 37.5 MHz*).
 5. Measure with the paper's methodology and record a cost model for RP2350.
 
 ## Write-ups
