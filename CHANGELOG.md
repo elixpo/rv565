@@ -3,6 +3,19 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## Unreleased
+
+- RP2 port runs on hardware: first bring-up on a Raspberry Pi Pico 2 with a
+  2.0" 320x240 ST7789, 24 FPS with zero misses on the test pattern.
+  - Command bytes (the init sequence and each frame's RAMWR) now go out at
+    10 MHz; at 37.5 MHz the panel misread them and stayed blank. Pixel data
+    still runs at the configured rate.
+  - SPI mode 3 instead of mode 0: the RP2350's PL022 leaves a gap after every
+    byte in mode 0. Measured frame time 39.71 ms → 33.57 ms; the transfer
+    now runs at 99.4% of the 37.5 MHz wire time (83.8% before).
+- RP2350 benchmark: wiring notes (short wires, a series resistor on SCL) and
+  `st7789_test.py`, a MicroPython wiring check.
+
 ## 1.1.0 — 2026-11-01
 
 - Any ST7789 module: the ESP32 and RP2 display configs take an

@@ -1,7 +1,8 @@
 /* RP2040/RP2350 port: ST7789 over SPI with DMA, and an inflate worker on
  * core 1. Builds with the Pico SDK and with Arduino-Pico.
  *
- * EXPERIMENTAL: not yet measured on hardware. See docs/ECOSYSTEM.md. */
+ * EXPERIMENTAL: runs on a Pico 2 (24 FPS on the test pattern, 2026-11-04),
+ * but the RP2350 cost model is not yet measured. See docs/ROADMAP.md. */
 #ifndef RV565_RP2_H
 #define RV565_RP2_H
 
