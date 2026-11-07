@@ -170,6 +170,8 @@ def main() -> int:
         "sample_frames",
         "overlap",
         "backlight_percent",
+        "codec",
+        "decoder",
     )
 
     for path in paths:
