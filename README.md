@@ -13,9 +13,10 @@ RV565 plays video on SPI panels such as the ST7789 from small, simple files:
 every frame is an independent zlib stream whose decoded bytes are already the
 panel's native RGB565. That makes three things possible on a microcontroller:
 
-- **24 FPS with zero missed frames** on the ESP32-S3: core 1 inflates the next
-  frame while core 0 scales and DMA-transfers the current one, so frame time
-  equals the display transfer (98.1% of the 40 MHz SPI bound).
+- **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2):
+  core 1 inflates the next frame while core 0 scales and DMA-transfers the
+  current one, so frame time equals the display transfer (98.1% of the SPI
+  bound on both).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.
@@ -26,6 +27,40 @@ The design and measurements are described in
 MicroPython-Class ESP32-S3 Systems*
 ([arXiv:2610.35935](https://arxiv.org/abs/2610.35935); artifact
 [doi:10.5281/zenodo.23543367](https://doi.org/10.5281/zenodo.23543367)).
+
+## Use .rv565 for your video
+
+1. **Make the file** from any video: in the
+   [online converter](https://oreo.elixpo.com/rv565/convert/) (runs in your
+   browser, nothing is uploaded), or with `pip install rv565` and
+   `rv565 encode input.mp4 clip.rv565` (needs FFmpeg).
+2. **Check it before you flash it:**
+
+   ```bash
+   rv565 verify clip.rv565                  # every frame decodes to its exact size
+   rv565 info --chip esp32s3 clip.rv565     # or --chip rp2350: will it keep its frame rate?
+   ```
+
+   `info` predicts each frame's decode time from the sizes stored in the file,
+   using the cost model measured on each chip. On a Pico 2 it predicted a
+   49.00 ms worst frame for a clip that measured 49.03 ms.
+3. **Play it:** in Arduino, *File → Examples → RV565 → ESP32S3_Player* or
+   *Pico2_Player*; with ESP-IDF, the `elixpo/rv565` component
+   (`examples_idf/player`).
+
+**What you can rely on**
+
+- **The format is frozen.** Version 6 is covered by the 1.x compatibility
+  promise: a clip you make today plays on every 1.x release
+  ([specification](docs/FORMAT.md)).
+- **Damaged files are rejected, not drawn.** Readers validate the header and
+  every frame, and a frame only counts if it decodes to exactly its RGB565
+  size.
+- **Verified hardware:** the ESP32-S3 and the RP2350, each with a 320x240
+  ST7789, play 24 FPS clips with zero missed deadlines using dual-core
+  decoding. Other boards and panels should work with the same code but have
+  not been measured yet; please
+  [report yours](https://github.com/elixpo/rv565/issues/28).
 
 ## Platforms
 
