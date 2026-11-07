@@ -13,9 +13,10 @@ RV565 plays video on SPI panels such as the ST7789 from small, simple files:
 every frame is an independent zlib stream whose decoded bytes are already the
 panel's native RGB565. That makes three things possible on a microcontroller:
 
-- **24 FPS with zero missed frames** on the ESP32-S3: core 1 inflates the next
-  frame while core 0 scales and DMA-transfers the current one, so frame time
-  equals the display transfer (98.1% of the 40 MHz SPI bound).
+- **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2):
+  core 1 inflates the next frame while core 0 scales and DMA-transfers the
+  current one, so frame time equals the display transfer (98.1% of the SPI
+  bound on both).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.
@@ -26,6 +27,40 @@ The design and measurements are described in
 MicroPython-Class ESP32-S3 Systems*
 ([arXiv:2610.35935](https://arxiv.org/abs/2610.35935); artifact
 [doi:10.5281/zenodo.23543367](https://doi.org/10.5281/zenodo.23543367)).
+
+## Use .rv565 for your video
+
+1. **Make the file** from any video: in the
+   [online converter](https://oreo.elixpo.com/rv565/convert/) (runs in your
+   browser, nothing is uploaded), or with `pip install rv565` and
+   `rv565 encode input.mp4 clip.rv565` (needs FFmpeg).
+2. **Check it before you flash it:**
+
+   ```bash
+   rv565 verify clip.rv565                  # every frame decodes to its exact size
+   rv565 info --chip esp32s3 clip.rv565     # or --chip rp2350: will it keep its frame rate?
+   ```
+
+   `info` predicts each frame's decode time from the sizes stored in the file,
+   using the cost model measured on each chip. On a Pico 2 it predicted a
+   49.00 ms worst frame for a clip that measured 49.03 ms.
+3. **Play it:** in Arduino, *File → Examples → RV565 → ESP32S3_Player* or
+   *Pico2_Player*; with ESP-IDF, the `elixpo/rv565` component
+   (`examples_idf/player`).
+
+**What you can rely on**
+
+- **The format is frozen.** Version 6 is covered by the 1.x compatibility
+  promise: a clip you make today plays on every 1.x release
+  ([specification](docs/FORMAT.md)).
+- **Damaged files are rejected, not drawn.** Readers validate the header and
+  every frame, and a frame only counts if it decodes to exactly its RGB565
+  size.
+- **Verified hardware:** the ESP32-S3 and the RP2350, each with a 320x240
+  ST7789, play 24 FPS clips with zero missed deadlines using dual-core
+  decoding. Other boards and panels should work with the same code but have
+  not been measured yet; please
+  [report yours](https://github.com/elixpo/rv565/issues/28).
 
 ## Platforms
 
@@ -170,13 +205,51 @@ and the Pico SDK example, and lints the library for the Arduino Library Manager.
 
 - **Tried RV565 on a board or display?** Tell us how it went, working or not:
   [report your hardware](https://github.com/elixpo/rv565/issues/new?template=hardware-report.yml).
-  Only the ESP32-S3 with a 320x240 ST7789 is verified so far, so every report
-  helps.
+  Verified so far: the ESP32-S3 and the RP2350 (Pico 2), each with a 320x240
+  ST7789, so every other board or panel report helps; see the
+  [open requests](https://github.com/elixpo/rv565/issues/28).
 - **Questions, ideas and projects** go to Elixpo's community discussions:
   [Q&A](https://github.com/elixpo/elixpo/discussions/categories/q-a),
   [Ideas](https://github.com/elixpo/elixpo/discussions/categories/ideas),
   [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell).
 - **Bugs:** [open an issue](https://github.com/elixpo/rv565/issues/new?template=bug-report.yml).
+
+## Where RV565 is
+
+**First device: the [Oreo Badge](https://github.com/elixpo/oreo).** RV565 was
+built for the Gallery app of OreoOS, the MicroPython operating system of the
+Oreo Badge, an ESP32-S3 conference badge. The badge is
+[certified open source hardware](https://certification.oshwa.org/in000107.html)
+by OSHWA (UID IN000107); its hardware is licensed under CERN-OHL-P-2.0 and
+OreoOS under MIT.
+
+**Published**
+
+- Paper: [arXiv:2610.35935](https://arxiv.org/abs/2610.35935), archived on
+  [Zenodo](https://doi.org/10.5281/zenodo.23543367)
+- Arduino Library Manager (search *RV565*) and the
+  [PlatformIO Registry](https://registry.platformio.org/libraries/elixpo/RV565)
+- [ESP Component Registry](https://components.espressif.com/components/elixpo/rv565)
+- [PyPI](https://pypi.org/project/rv565/)
+- [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+- Write-up of the Pico 2 port:
+  [*The Screen Was Blank*](https://blogs.elixpo.com/elixpohere/rv565-pico-2-tweak)
+
+**Submitted, under review**
+
+- FFmpeg decoder, encoder, demuxer and muxer:
+  [FFmpeg #25653](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/25653)
+- The `video/x-rv565` MIME type in freedesktop shared-mime-info:
+  [!449](https://gitlab.freedesktop.org/xdg/shared-mime-info/-/merge_requests/449)
+- A `file(1)` magic entry: [bugs.astron.com #819](https://bugs.astron.com/view.php?id=819)
+- PRONOM, the National Archives' format registry:
+  [PRONOM_Research #202](https://github.com/digital-preservation/PRONOM_Research/pull/202)
+- [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67) and
+  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92)
+
+Using RV565 in a project? Tell us in
+[Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell)
+and we will list it here.
 
 ## Citation
 
