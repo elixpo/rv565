@@ -5,8 +5,13 @@
 #
 # Usage: tools/run_codec_comparison.sh <source-video> [port] [runs]
 # Both Big Buck Bunny windows (90 s, 360 s). Per window:
-#   dual core: RV565, MJPEG q2/q5/q10 4:2:0 and q2 4:4:4
+#   dual core: RV565, MJPEG q2/q5/q10 4:2:0
 #   serial:    RV565 and MJPEG q5 4:2:0
+# No 4:4:4: esp_new_jpeg 1.0.2 rejects it ("Not supported JPEG format"), so
+# MJPEG's best-quality mode does not play on the S3 at all.
+#
+# RV565_RESUME=1 skips any configuration that already has an aggregate in
+# benchmarks/measurements/, to pick a stopped run back up.
 set -euo pipefail
 
 source_video=$1
@@ -15,13 +20,23 @@ runs=${3:-10}
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo"
 
-matrix() { tools/run_rv565_matrix.sh "$source_video" "$1" "$2" "$port" "$runs"; }
+matrix() {
+  local label
+  label=$(printf 'bbb%03d-%s' "$1" "$2")
+  [ "${RV565_CODEC}" = mjpeg ] && label="$label-mjpeg-q$RV565_JPEG_Q-$RV565_JPEG_SUB"
+  if [ "${RV565_RESUME:-0}" = 1 ] &&
+     ls benchmarks/measurements/video-benchmark-"$label"-aggregate-*.json >/dev/null 2>&1; then
+    echo "== $label: already measured, skipping"
+    return
+  fi
+  tools/run_rv565_matrix.sh "$source_video" "$1" "$2" "$port" "$runs"
+}
 
 for start in 90 360; do
   for mode in overlap serial; do
     RV565_CODEC=rv565 matrix "$start" "$mode"
     if [ "$mode" = overlap ]; then
-      configs="2:420 5:420 10:420 2:444"
+      configs="2:420 5:420 10:420"
     else
       configs="5:420"
     fi
@@ -34,7 +49,7 @@ done
 latest=()
 for start in 090 360; do
   for label in overlap overlap-mjpeg-q2-420 overlap-mjpeg-q5-420 overlap-mjpeg-q10-420 \
-               overlap-mjpeg-q2-444 serial serial-mjpeg-q5-420; do
+               serial serial-mjpeg-q5-420; do
     latest+=("$(ls -t benchmarks/measurements/video-benchmark-bbb$start-$label-aggregate-*.json | head -1)")
   done
 done
