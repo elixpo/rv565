@@ -31,7 +31,7 @@ MicroPython-Class ESP32-S3 Systems*
 
 | Platform | Install | Status |
 | --- | --- | --- |
-| ESP32-S3, ESP-IDF | `idf.py add-dependency "elixpo/rv565"` ([registry](https://components.espressif.com/components/elixpo/rv565)) | Measured in the paper |
+| ESP32-S3, ESP-IDF | `idf.py add-dependency "elixpo/rv565"` ([registry](https://components.espressif.com/components/elixpo/rv565)) | Measured in the paper; [against MJPEG](docs/RESULTS_MJPEG.md) |
 | ESP32-S3, Arduino | Library Manager → *RV565* | Same code as ESP-IDF |
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Measured: 24 FPS dual-core ([results](docs/RESULTS_RP2350.md)) |
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Same code as the Pico SDK |
