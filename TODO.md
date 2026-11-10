@@ -33,3 +33,38 @@ plan after 1.0, with every 🙋 item that needs you, is in `docs/ROADMAP.md`.
 
 6. Espressif Developer Portal article and Arduino Project Hub post once the
    listings are live.
+
+## Getting RV565 known (2026-11-10)
+
+Upstream reviews first, then listings, then posts. 🤖 = Claude drafts,
+🙋 = you send or post.
+
+7. **FFmpeg** (code.ffmpeg.org PR, `rv565` branch on the `elixpo` fork):
+   rebased on master 2026-11-10 (lavc 63.29.100, lavf 63.19.100), probe
+   accepts any zlib window. Waiting for the maintainers' inclusion decision;
+   if asked, shrink or drop `libavformat/tests/rv565.c` and keep
+   `fate-lavf-rv565`. `contrib/ffmpeg/` still holds the old single patch:
+   refresh it from the two commits once merged.
+8. **shared-mime-info** (freedesktop !449): fixes pushed; 🙋 ping the MR once
+   FFmpeg merges.
+9. **Pico 2 MJPEG comparison**: 🤖 add an `RV565_CODEC=1` build to
+   `benchmarks/rp2350_video_dma` with bitbank2's JPEGDEC (the fastest common
+   Cortex-M decoder, as `esp_new_jpeg` was on the S3), 4 s windows; 🙋 flash and
+   run; 🤖 write `docs/RESULTS_MJPEG.md`'s Pico section.
+10. **`file(1)` magic**: 🙋 send `contrib/file/0001-Add-magic-for-RV565-video.patch`
+    to the file project (bugs.astron.com or the file mailing list).
+11. **PRONOM** (UK National Archives format registry): 🙋 submit
+    `contrib/pronom/SUBMISSION.md` through their new-format form.
+12. **Kaitai Struct format gallery**: 🤖 write `rv565.ksy`; 🙋 PR to
+    kaitai-io/kaitai_struct_formats (`media/`).
+13. **Arduino_GFX**: 🤖 an RV565 playback example beside its MJPEG demo;
+    🙋 PR to moononournation/Arduino_GFX.
+14. **LVGL**: 🤖 an RV565 video decoder for LVGL (it has image decoders but
+    no cheap video); 🙋 post on the LVGL forum first to check interest.
+15. **Awesome lists**: 🤖 one-line PRs for RV565 itself in awesome-esp,
+    awesome-micropython and awesome-raspberry-pi-pico (the existing entries
+    are for OreoOS).
+16. **Raspberry Pi**: 🙋 a forum post (Projects) and a news tip, after item 9,
+    with the Pico numbers and the RP2350 HSTX measurements. A `pico-examples`
+    PR would likely be declined, so skip it.
+17. **Adafruit**: 🙋 a blog tip / Python on Hardware newsletter submission.
