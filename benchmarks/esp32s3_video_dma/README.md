@@ -89,7 +89,7 @@ RV565_CODEC=mjpeg RV565_JPEG_Q=5 RV565_JPEG_SUB=420 \
 The whole comparison (both windows; dual core: RV565, MJPEG q2/q5/q10 4:2:0;
 serial: RV565 and MJPEG q5), followed by the table. 4:4:4 is left out because
 `esp_new_jpeg` 1.0.2 does not decode it. Results are in
-[`docs/RESULTS_MJPEG.md`](../../docs/RESULTS_MJPEG.md).
+[`docs/RESULTS_MJPEG.md`](../../docs/RESULTS_MJPEG.md#esp32-s3).
 
 ```bash
 tools/run_codec_comparison.sh /path/to/big_buck_bunny.mov
