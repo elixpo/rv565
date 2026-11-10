@@ -49,10 +49,12 @@ Upstream reviews first, then listings, then posts. 🤖 = Claude drafts,
    FFmpeg merges.
 9. Done 2026-11-10: **Pico 2 MJPEG comparison** with JPEGDEC, in
    `docs/RESULTS_MJPEG.md` (#36). RV565 decodes 1.15–1.54× faster there.
-10. **`file(1)` magic**: 🙋 send `contrib/file/0001-Add-magic-for-RV565-video.patch`
-    to the file project (bugs.astron.com or the file mailing list).
-11. **PRONOM** (UK National Archives format registry): 🙋 submit
-    `contrib/pronom/SUBMISSION.md` through their new-format form.
+10. Sent 2026-11-10: **`file(1)` magic**, https://bugs.astron.com/view.php?id=822
+    and by email to Christos Zoulas; ⏳ waiting for it to be committed.
+11. Sent 2026-11-01: **PRONOM**,
+    https://github.com/digital-preservation/PRONOM_Research/pull/202 (Readme,
+    signature and sample; #205 was a duplicate and is closed); ⏳ waiting for
+    review.
 12. **Kaitai Struct format gallery**: written, `contrib/kaitai/rv565.ksy`; 🙋 PR to
     kaitai-io/kaitai_struct_formats (`media/`).
 13. **Arduino_GFX**: 🤖 an RV565 playback example beside its MJPEG demo;
