@@ -136,8 +136,9 @@ records (4.858 ms + 0.1515 µs/byte, r² 0.9987).
 (`tools/encode_mjpeg_benchmark.py`) decoded to big-endian RGB565 by bitbank2's
 [JPEGDEC](https://github.com/bitbank2/JPEGDEC) 1.8.5, fetched at a pinned commit.
 JPEGDEC runs as plain C on the RP2350 (its SIMD paths are for other chips).
-Frames reach the player through its decoder backend: on core 1 in overlap
-mode, inline on core 0 in serial mode. Scaling, stripes, DMA, pacing and
+In overlap mode JPEGDEC runs on core 1 through the player's decoder backend.
+In serial mode it decodes on core 0 only the frame being presented, as RV565's
+serial path does. Scaling, stripes, DMA, pacing and
 measurement are shared with the RV565 build.
 
 The whole comparison (both windows; dual core: RV565, MJPEG q2/q5/q10 4:2:0;
@@ -148,3 +149,5 @@ tools/run_codec_comparison_rp2350.sh /path/to/big_buck_bunny.mov /dev/ttyACM0 10
 ```
 
 The panel is optional for this: SPI clocks the frames out with or without it.
+Results are in
+[`docs/RESULTS_MJPEG.md`](../../docs/RESULTS_MJPEG.md#raspberry-pi-pico-2-rp2350).
