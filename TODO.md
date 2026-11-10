@@ -47,15 +47,13 @@ Upstream reviews first, then listings, then posts. 🤖 = Claude drafts,
    refresh it from the two commits once merged.
 8. **shared-mime-info** (freedesktop !449): fixes pushed; 🙋 ping the MR once
    FFmpeg merges.
-9. **Pico 2 MJPEG comparison**: 🤖 add an `RV565_CODEC=1` build to
-   `benchmarks/rp2350_video_dma` with bitbank2's JPEGDEC (the fastest common
-   Cortex-M decoder, as `esp_new_jpeg` was on the S3), 4 s windows; 🙋 flash and
-   run; 🤖 write `docs/RESULTS_MJPEG.md`'s Pico section.
+9. Done 2026-11-10: **Pico 2 MJPEG comparison** with JPEGDEC, in
+   `docs/RESULTS_MJPEG.md` (#36). RV565 decodes 1.15–1.54× faster there.
 10. **`file(1)` magic**: 🙋 send `contrib/file/0001-Add-magic-for-RV565-video.patch`
     to the file project (bugs.astron.com or the file mailing list).
 11. **PRONOM** (UK National Archives format registry): 🙋 submit
     `contrib/pronom/SUBMISSION.md` through their new-format form.
-12. **Kaitai Struct format gallery**: 🤖 write `rv565.ksy`; 🙋 PR to
+12. **Kaitai Struct format gallery**: written, `contrib/kaitai/rv565.ksy`; 🙋 PR to
     kaitai-io/kaitai_struct_formats (`media/`).
 13. **Arduino_GFX**: 🤖 an RV565 playback example beside its MJPEG demo;
     🙋 PR to moononournation/Arduino_GFX.
