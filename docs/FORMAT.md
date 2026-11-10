@@ -10,7 +10,13 @@ decoded on its own, so seeking is O(1) and a damaged frame cannot affect others.
 | --- | --- |
 | Extension | `.rv565` |
 | MIME type | `video/x-rv565` |
-| Signature | `RV5` at offset 0, version `6` at offset 3, a frame rate of 1–30 at offset 8, and `0x78` (zlib header) at offset 16 |
+| Signature | `RV5` at offset 0, version `6` at offset 3, a frame rate of 1–30 at offset 8, and a zlib header at offset 16 |
+
+The zlib header byte at offset 16 is `0x78` in practice: the reference
+encoders use the default 32 KiB window. RFC 1950 also allows smaller windows
+(CM 8, CINFO 0–7, so `0x08`–`0x78` in steps of `0x10`), and readers must
+accept them; signatures that match only `0x78` identify every file the
+reference encoders write.
 
 Signatures for `file(1)`, shared-mime-info and PRONOM are in `contrib/`.
 
