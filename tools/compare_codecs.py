@@ -17,6 +17,13 @@ import math
 from pathlib import Path
 
 
+def clip_name(label: str) -> str:
+    """The clip window in a label: bbb090-overlap and rp2350-bbb090-overlap
+    both give bbb090."""
+    return next((part for part in label.split("-") if part.startswith("bbb")),
+                label.split("-")[0])
+
+
 def row(path: Path) -> dict[str, object]:
     agg = json.loads(path.read_text(encoding="utf-8"))
     if "aggregate_schema_version" not in agg:
@@ -71,14 +78,14 @@ def main() -> int:
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
     rows = sorted((row(p) for p in args.aggregates),
-                  key=lambda r: (r["label"].split("-")[0], r["overlap"],
+                  key=lambda r: (clip_name(r["label"]), r["overlap"],
                                  r["codec"] != "rv565", -r["frame_bytes_mean"]))
     print("| Clip | Mode | Format | Size | Bytes/frame | PSNR (worst frame) | FPS "
           "| Misses | Drops | Decode p50 / p99 | Frame p50 / p99 / max |")
     print("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for r in rows:
         fmt = "RV565" if r["codec"] == "rv565" else f"MJPEG {r['quality']}"
-        print(f"| {r['label'].split('-')[0]} | {'dual' if r['overlap'] else 'serial'} "
+        print(f"| {clip_name(r['label'])} | {'dual' if r['overlap'] else 'serial'} "
               f"| {fmt} | {r['file_mib']:.2f} MiB | {r['frame_bytes_mean']:,.0f} "
               f"| {db(r['psnr_db'])} ({db(r['psnr_db_worst_frame'])}) "
               f"| {r['fps']:.3f} | {r['deadline_misses']}/{r['frames_timed']} "

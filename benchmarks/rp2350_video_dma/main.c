@@ -11,8 +11,17 @@
  * runs without reflashing.
  *
  * Wiring (SPI0): SCLK GP18, MOSI GP19, CS GP17, DC GP20, RST GP21, BL GP22.
+ * The panel is optional for measurement: SPI clocks the bytes out either way.
+ *
+ * RV565_CODEC=1 swaps the decoder for the MJPEG baseline, as in
+ * benchmarks/esp32s3_video_dma: each frame is a baseline JPEG
+ * (tools/encode_mjpeg_benchmark.py), decoded to big-endian RGB565 by bitbank2's
+ * JPEGDEC. Scaling, stripes, DMA, pacing and measurement are shared. Frames
+ * reach the player through its decoder backend: on core 1 with
+ * RV565_OVERLAP=1, inline on core 0 with RV565_OVERLAP=0.
  */
 #include <stdio.h>
+#include <string.h>
 
 #include "hardware/clocks.h"
 #include "hardware/spi.h"
@@ -23,6 +32,15 @@
 
 #ifndef RV565_OVERLAP
 #define RV565_OVERLAP 1
+#endif
+#ifndef RV565_CODEC
+#define RV565_CODEC 0
+#endif
+#define CODEC_MJPEG (RV565_CODEC == 1)
+
+#if CODEC_MJPEG
+#include "JPEGDEC.h"
+#include "pico/multicore.h"
 #endif
 
 #define PANEL           RV565_PANEL_320X240
@@ -64,6 +82,143 @@ static void fail(const char *what, rv565_status_t st)
     }
 }
 
+#if CODEC_MJPEG
+/* MJPEG container: "MJP" 0x01 | u16 w | u16 h | u8 fps | u8 0 | u16 frames,
+ * then per frame a u32 little-endian length and a baseline JPEG. */
+#define MJPEG_HEADER_SIZE 12
+static uint32_t jpeg_bytes[MAX_FRAMES];
+static JPEGIMAGE jpeg;  /* one decode at a time, on whichever core decodes */
+
+static uint32_t rd16(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8; }
+static uint32_t rd32(const uint8_t *p) { return rd16(p) | rd16(p + 2) << 16; }
+
+static rv565_status_t mjpeg_open(rv565_clip_t *clip, const uint8_t *data, size_t size)
+{
+    if (size < MJPEG_HEADER_SIZE || memcmp(data, "MJP\x01", 4) != 0) return RV565_ERR_MAGIC;
+    clip->header.width = (uint16_t)rd16(data + 4);
+    clip->header.height = (uint16_t)rd16(data + 6);
+    clip->header.fps = data[8];
+    clip->header.flags = 0;
+    clip->header.frames = (uint16_t)rd16(data + 10);
+    const rv565_header_t *h = &clip->header;
+    if (!h->width || !h->height || !h->fps || h->fps > RV565_MAX_FPS || !h->frames ||
+            h->frames > MAX_FRAMES) {
+        return RV565_ERR_HEADER;
+    }
+    size_t at = MJPEG_HEADER_SIZE;
+    for (uint32_t i = 0; i < h->frames; ++i) {
+        if (size - at < 4) return RV565_ERR_TRUNCATED;
+        jpeg_bytes[i] = rd32(data + at);
+        at += 4;
+        if (size - at < jpeg_bytes[i]) return RV565_ERR_TRUNCATED;
+        frame_index[i] = (uint32_t)at;
+        at += jpeg_bytes[i];
+    }
+    if (at != size) return RV565_ERR_TRAILING;
+    clip->data = data;
+    clip->size = size;
+    clip->index = frame_index;
+    return RV565_OK;
+}
+
+typedef struct {
+    uint8_t *dst;
+    uint16_t width;
+} jpeg_target_t;
+
+/* JPEGDEC hands over blocks of MCUs; copy the visible part into the frame. */
+static int jpeg_draw(JPEGDRAW *d)
+{
+    const jpeg_target_t *t = d->pUser;
+    for (int r = 0; r < d->iHeight; ++r) {
+        memcpy(t->dst + ((size_t)(d->y + r) * t->width + d->x) * 2u,
+               d->pPixels + (size_t)r * d->iWidth, (size_t)d->iWidthUsed * 2u);
+    }
+    return 1;
+}
+
+/* Header parsing is part of each frame's decode, as it would be in a player. */
+static rv565_status_t jpeg_decode_frame(const rv565_clip_t *clip, uint16_t index, uint8_t *dst)
+{
+    jpeg_target_t target = { dst, clip->header.width };
+    if (!JPEG_openRAM(&jpeg, (uint8_t *)clip->data + clip->index[index],
+                      (int)jpeg_bytes[index], jpeg_draw)) {
+        return RV565_ERR_INFLATE;
+    }
+    rv565_status_t st = RV565_ERR_INFLATE;
+    if (JPEG_getWidth(&jpeg) == clip->header.width &&
+            JPEG_getHeight(&jpeg) == clip->header.height) {
+        JPEG_setPixelType(&jpeg, RGB565_BIG_ENDIAN);  /* openRAM resets it */
+        jpeg.pUser = &target;
+        if (JPEG_decode(&jpeg, 0, 0, 0)) st = RV565_OK;
+    }
+    JPEG_close(&jpeg);
+    return st;
+}
+
+#if RV565_OVERLAP
+/* Decode on core 1 while core 0 scales and transfers, like the RV565 port. */
+static uint32_t core1_stack[16 * 1024 / 4];
+static struct {
+    const rv565_clip_t *clip;
+    volatile uint16_t index;
+    uint8_t *volatile dst;
+    volatile rv565_status_t status;
+    volatile uint32_t decode_us;
+} job;
+
+static void core1_main(void)
+{
+    for (;;) {
+        (void)multicore_fifo_pop_blocking();
+        const uint32_t t = time_us_32();
+        job.status = jpeg_decode_frame(job.clip, job.index, job.dst);
+        job.decode_us = time_us_32() - t;
+        multicore_fifo_push_blocking(1);
+    }
+}
+
+static void jpeg_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+{
+    (void)len;
+    job.clip = ctx;
+    job.index = index;
+    job.dst = dst;
+    multicore_fifo_push_blocking(0);
+}
+
+static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
+{
+    (void)ctx;
+    (void)multicore_fifo_pop_blocking();
+    *decode_us = job.decode_us;
+    return job.status;
+}
+#else
+/* Serial: decode inline on core 0. The player's backend prefetches, so each
+ * present decodes the next frame and then transfers the current one: one
+ * decode and one transfer per frame on one core, as in the RV565 serial path.
+ * After a skip the prefetch is stale and that present decodes twice. */
+static rv565_status_t inline_status;
+static uint32_t inline_us;
+
+static void jpeg_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+{
+    (void)len;
+    const uint32_t t = time_us_32();
+    inline_status = jpeg_decode_frame(ctx, index, dst);
+    inline_us = time_us_32() - t;
+}
+
+static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
+{
+    (void)ctx;
+    *decode_us = inline_us;
+    return inline_status;
+}
+#endif
+#endif /* CODEC_MJPEG */
+
 static bool present(rv565_player_t *player, uint16_t frame, frame_sample_t *sample)
 {
     rv565_frame_stats_t stats;
@@ -88,11 +243,19 @@ static void print_metadata(const rv565_clip_t *clip, uint32_t warmup, uint32_t c
     printf("RV565_META,source_height=%u\n", clip->header.height);
     printf("RV565_META,source_fps=%u\n", clip->header.fps);
     printf("RV565_META,source_frames=%u\n", clip->header.frames);
+#if CODEC_MJPEG
+    printf("RV565_META,container_version=1\n");
+#else
     printf("RV565_META,container_version=%u\n", RV565_CONTAINER_V6);
+#endif
     printf("RV565_META,container_bytes=%u\n", (unsigned)(rv565_video_end - rv565_video_start));
     printf("RV565_META,warmup_frames=%lu\n", (unsigned long)warmup);
     printf("RV565_META,sample_frames=%lu\n", (unsigned long)count);
     printf("RV565_META,overlap=%d\n", RV565_OVERLAP);
+#if CODEC_MJPEG
+    printf("RV565_META,codec=mjpeg\n");
+    printf("RV565_META,decoder=JPEGDEC %s\n", RV565_JPEGDEC_VERSION);
+#endif
     printf("RV565_META,library_version=%d.%d.%d\n",
            RV565_VERSION_MAJOR, RV565_VERSION_MINOR, RV565_VERSION_PATCH);
     printf("RV565_READY\n");
@@ -176,9 +339,14 @@ int main(void)
     stdio_init_all();
 
     rv565_clip_t clip;
+#if CODEC_MJPEG
+    rv565_status_t st = mjpeg_open(&clip, rv565_video_start,
+                                   (size_t)(rv565_video_end - rv565_video_start));
+#else
     rv565_status_t st = rv565_open(&clip, rv565_video_start,
                                    (size_t)(rv565_video_end - rv565_video_start),
                                    frame_index, MAX_FRAMES, PANEL_W, PANEL_H);
+#endif
     if (st != RV565_OK) fail("open", st);
     if (rv565_frame_bytes(&clip.header) > MAX_FRAME_BYTES) fail("frame size", RV565_ERR_ARG);
 
@@ -188,7 +356,7 @@ int main(void)
         .panel_height = PANEL_H,
         .stripe_rows = STRIPE_ROWS,
         .stripes = { stripes[0], stripes[1] },
-        .frames = { frames[0], RV565_OVERLAP ? frames[1] : NULL },
+        .frames = { frames[0], (RV565_OVERLAP || CODEC_MJPEG) ? frames[1] : NULL },
         .xmap = xmap,
         .ymap = ymap,
         .micros = rv565_rp2_micros,
@@ -199,7 +367,14 @@ int main(void)
         .panel = PANEL,
     };
     if ((st = rv565_rp2_display_init(&display, &player.display)) != RV565_OK) fail("display", st);
+#if CODEC_MJPEG
 #if RV565_OVERLAP
+    multicore_launch_core1_with_stack(core1_main, core1_stack, sizeof(core1_stack));
+#endif
+    player.decoder.ctx = &clip;
+    player.decoder.start = jpeg_start;
+    player.decoder.finish = jpeg_finish;
+#elif RV565_OVERLAP
     if ((st = rv565_rp2_decoder_init(&clip, &player.decoder)) != RV565_OK) fail("decoder", st);
 #endif
     if ((st = rv565_player_init(&player)) != RV565_OK) fail("player", st);
