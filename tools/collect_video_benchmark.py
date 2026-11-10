@@ -286,6 +286,10 @@ def main() -> int:
 
     platform = PLATFORMS[args.platform]
     artifacts = {name: platform["dir"] / path for name, path in platform["artifacts"].items()}
+    if parsed.get("metadata", {}).get("codec") == "mjpeg":
+        media = artifacts["media"].with_suffix(".mjpeg")
+        artifacts["media"] = media
+        artifacts["media_report"] = media.with_name(media.name + ".json")
     artifacts["collector_source"] = Path(__file__).resolve()
     record = {
         "collector_schema_version": 1,
