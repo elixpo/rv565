@@ -195,33 +195,42 @@ static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
     return job.status;
 }
 #else
-/* Serial: decode inline on core 0. The player's backend prefetches, so each
- * present decodes the next frame and then transfers the current one: one
- * decode and one transfer per frame on one core, as in the RV565 serial path.
- * After a skip the prefetch is stale and that present decodes twice. */
-static rv565_status_t inline_status;
-static uint32_t inline_us;
-
+/* Serial: decode, then transfer, on core 0, decoding only the frame that is
+ * presented, as the RV565 serial path does. The library's serial path always
+ * inflates, so present() decodes the frame into the player's current buffer
+ * and marks it ready, and the backend's prefetch does nothing. (Prefetching
+ * here would decode every skipped frame too, which RV565 serial never does.) */
 static void jpeg_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
 {
+    (void)ctx;
+    (void)index;
+    (void)dst;
     (void)len;
-    const uint32_t t = time_us_32();
-    inline_status = jpeg_decode_frame(ctx, index, dst);
-    inline_us = time_us_32() - t;
 }
 
 static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
 {
     (void)ctx;
-    *decode_us = inline_us;
-    return inline_status;
+    *decode_us = 0;
+    return RV565_OK;
 }
+#define MJPEG_SERIAL 1
 #endif
 #endif /* CODEC_MJPEG */
 
 static bool present(rv565_player_t *player, uint16_t frame, frame_sample_t *sample)
 {
     rv565_frame_stats_t stats;
+    uint32_t decode_us = 0;
+#ifdef MJPEG_SERIAL
+    const uint32_t t = time_us_32();
+    if (jpeg_decode_frame(player->clip, frame, player->frames[player->current]) != RV565_OK) {
+        return false;
+    }
+    decode_us = time_us_32() - t;
+    player->ready_frame = frame;          /* the player sends it without decoding */
+    player->ready_inflate_us = decode_us;
+#endif
     if (rv565_player_present(player, frame, &stats) != RV565_OK) {
         return false;
     }
@@ -229,7 +238,7 @@ static bool present(rv565_player_t *player, uint16_t frame, frame_sample_t *samp
     sample->scale_us = stats.scale_us;
     sample->dma_wait_us = stats.wait_us;
     sample->lcd_us = stats.transfer_us;
-    sample->work_us = stats.work_us;
+    sample->work_us = stats.work_us + decode_us;  /* decode ran before the player's clock */
     return true;
 }
 
