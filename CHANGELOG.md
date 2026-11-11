@@ -5,6 +5,17 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+- CircuitPython library 2.0.0 (`ports/circuitpython/`): reads format
+  version 7 as well as version 6, with every pixel format, the stored and
+  zlib codecs, and keyframe, XOR delta and repeat frames, validated on open
+  and indexing as the reference does, and checked in host tests against every
+  conformance vector in `tests/data/v7` (in order and by random seeks). It
+  decodes into one reused frame buffer, so `Clip.frame()` returns a buffer
+  that the next call overwrites, and XORs deltas in 2 KiB chunks through long
+  integers. `Player` shows `rgb565be`, `rgb565le`, `gray8`, `gray4` and
+  `mono`, and `DirectPlayer` sends `rgb565be` and `rgb666` (COLMOD 0x66);
+  both skip repeat frames and name the supported formats for any other clip.
+  The version 7 paths have not yet run on a board.
 - Experimental CircuitPython library, `ports/circuitpython/`
   (`circuitpython_rv565`): reads version 6 files from a path, file object or
   bytes with a lazily built frame index, inflates with the built-in `zlib`,
