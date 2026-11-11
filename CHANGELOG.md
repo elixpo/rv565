@@ -8,12 +8,15 @@ All notable changes to RV565 are listed here. The project follows
 Version 2.0.0 introduces RV565 format version 7 (`docs/FORMAT.md`): the
 header declares one of nine pixel formats (`rgb565be`, `rgb565le`, `rgb444`,
 `rgb666`, `rgb888`, `gray8`, `gray4`, `mono`, `mono_vpage`) and a codec
-(stored or zlib), frames are keyframes, exact XOR deltas or repeats, and a
-keyframe interval keeps seeking bounded. Version 6 files stay readable
-everywhere.
+(stored or zlib), frames are keyframes, exact XOR deltas, partial deltas
+or repeats, and a keyframe interval keeps seeking bounded. A partial delta
+stores only the bands of rows that changed, each with a shift, so players
+decode and send to the display only those rows, and scrolling content costs
+a small residual. Version 6 files stay readable everywhere.
 
-- Conformance vectors in `tests/data/v7` (27 valid files with each decoded
-  frame's SHA-256, 20 invalid files with the stage that must reject them),
+- Conformance vectors in `tests/data/v7` (53 valid files with each decoded
+  frame's SHA-256 and changed lines, 29 invalid files with the stage that
+  must reject them),
   written and checked by `tools/make_conformance.py`. Every implementation
   is tested against them in CI.
 - Python package 2.0.0, the reference implementation: `rv565.write()` takes
@@ -25,9 +28,22 @@ everywhere.
   `encode` now writes version 7 with one keyframe per second by default.
   `rv565 info` reports the format, codec and frame types. The Pillow plugin
   opens every pixel format and saves with the same options.
-- `docs/RESULTS_V7.md`: on the paper's film windows, version 7 with one
-  keyframe per second is 4.8–5.5× (W90) and 1.8–2.0× (W360) smaller than
-  version 6. File sizes only; playback on hardware is not measured yet.
+- The reference encoder writes partial deltas (`band_lines`, 8 by default;
+  `--band-lines`), searches a shift per changed band (`motion_range`, 8
+  pixels; `--motion-range`), and takes a tolerance (`tolerance`,
+  `--tolerance`, 0 by default): it keeps a pixel of the previous decoded
+  frame when every channel is within T, so the error stays bounded by T.
+  `Clip.changed_lines()` and `rv565.frame_lines()` give the rows a frame
+  changes; `rv565 info` reports the share of lines sent to the display.
+  `tools/measure_v7.py` and `tools/make_ui_clip.py` measure size, PSNR and
+  display traffic.
+- `docs/RESULTS_V7.md`: sizes, PSNR and display traffic on the paper's film
+  windows and a UI clip, against MJPEG and ZMBV. Lossless, version 7 is
+  5.5× (W90) and 2.1× (W360) smaller than version 6; at tolerance 8 the W90
+  clip is 2.3× smaller than MJPEG q2 at 5.4 dB better; the UI clip is
+  lossless at 6% of MJPEG q2's size and sends 44% of the rows. MJPEG stays
+  smaller on high-motion film, and ZMBV on the UI clip. Playback on hardware
+  is not measured yet.
 - `contrib/ffmpeg`: the FFmpeg decoder, demuxer and muxer read and validate
   partial deltas with shifted bands, and the encoder writes them
   (`-band_lines`, `-motion_range`) and takes `-tolerance`, byte-identical to
