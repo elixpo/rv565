@@ -14,7 +14,9 @@ shows them with ``displayio`` or straight over an ST7789's bus.
 Version 2.0 reads **format version 7**: all nine pixel formats (``rgb565be``,
 ``rgb565le``, ``rgb444``, ``rgb666``, ``rgb888``, ``gray8``, ``gray4``,
 ``mono``, ``mono_vpage``), both codecs (stored and zlib), and keyframes, XOR
-delta frames and repeat frames with seeking through the keyframe interval.
+delta frames, partial deltas and repeat frames with seeking through the
+keyframe interval. Both players redraw only what changed: nothing for a
+repeat, and only the changed bands of rows for a partial delta.
 Version 6 files (RGB565 big-endian, zlib, every frame a keyframe) still
 read. Which formats each player can show:
 
@@ -33,9 +35,10 @@ other clip.
 **Status: experimental.** It passes host tests against every RV565
 conformance vector (``tests/data/v7``) and, for version 6 clips, plays on a
 Raspberry Pi Pico 2 under CircuitPython 10.3.1 (measurements below). The
-version 7 paths (stored frames, deltas, repeats, ``rgb565le``, the grey and
-mono palettes, ``rgb666`` on ``DirectPlayer``) are tested on a computer only
-and have not yet run on a board.
+version 7 paths (stored frames, deltas, partial deltas, repeats,
+``rgb565le``, the grey and mono palettes, ``rgb666`` on ``DirectPlayer``,
+partial bitmap and window updates) are tested on a computer only and have not
+yet run on a board.
 
 Measured on a Raspberry Pi Pico 2 (RP2350, CircuitPython 10.3.1), playing
 the 180x135, 24 FPS test pattern to a 320x240 ST7789 on SPI at 40 MHz
@@ -132,8 +135,8 @@ Usage
 size, rate and frame count). The frame index is built on first use with one
 pass over the record headers (5 bytes of RAM per frame), which also validates
 the rest of the container as the format requires: lengths, trailing bytes,
-frame types, a keyframe at every multiple of ``K``, empty repeats and
-exact-size stored frames. Call ``clip.build_index()`` to do that before
+frame types, a keyframe at every multiple of ``K``, empty repeats, each
+partial delta's band height and band mask, and exact-size stored frames. Call ``clip.build_index()`` to do that before
 playback. Frames are read from the file one at a time, so a clip on
 CIRCUITPY or an SD card does not have to fit in RAM.
 
@@ -143,7 +146,14 @@ not inflate to exactly that many bytes. The result is the clip's own frame
 buffer, overwritten by the next call: copy it with ``bytes()`` to keep it.
 Decoding the next frame applies one record; a seek starts at the latest
 keyframe at or before ``i`` and applies at most ``K - 1`` records.
-``clip.frame_type(i)`` is ``"key"``, ``"delta"`` or ``"repeat"``.
+``clip.frame_type(i)`` is ``"key"``, ``"delta"``, ``"repeat"`` or
+``"partial"``. ``clip.changed_lines(i)`` lists the line runs ``(first,
+count)`` frame ``i`` changes (every line for a keyframe or delta, none for a
+repeat, the changed bands for a partial delta; lines are pixel rows, or pages
+of 8 rows for ``mono_vpage``), read from the band mask without decoding.
+``clip.dirty_lines(since, i)`` merges them over several frames: what changed
+between a picture on screen and frame ``i``, which the players use after
+skipping frames.
 
 Memory
 ------
@@ -159,6 +169,10 @@ All figures for a 180x135 clip (``S`` = 48,600 bytes in RGB565):
   existing buffer), plus the compressed body read from the file. A keyframe
   is copied into the frame buffer; a delta is XORed into it in place. Peak:
   about ``2 S`` plus the body, the same for keyframes and deltas.
+* **Partial deltas:** the inflate output is only as large as the changed
+  bands, and is XORed into those bands of the frame buffer in place; the
+  rest of the frame is not touched. A stored partial delta read from a file
+  uses the start of the scratch buffer below.
 * **Stored codec:** a keyframe read from a file goes straight into the frame
   buffer with ``readinto``, with no other allocation; a stored delta needs
   one more ``S``-byte scratch buffer, allocated once. Clips passed as
@@ -170,7 +184,10 @@ All figures for a 180x135 clip (``S`` = 48,600 bytes in RGB565):
   (CircuitPython stores them at 4 and 1 bits per pixel). Some ports copy the
   frame into the ``io.BytesIO`` that ``bitmaptools.readinto`` reads from,
   which can add another ``S`` while drawing.
-* **DirectPlayer:** no bitmap; it sends the frame buffer itself.
+  Partial updates add two small scratch bitmaps (8 rows and 1 row of the
+  clip's width; 2.9 KiB and 360 bytes at 180 wide in RGB565).
+* **DirectPlayer:** no bitmap; it sends the frame buffer itself, or slices
+  of it for partial deltas.
 
 So ``Player`` with a 180x135 RGB565 zlib clip needs roughly 150 to 200 KiB
 of heap at its peak (frame buffer, inflate output, bitmap, and possibly the
@@ -194,12 +211,25 @@ to be applied to reach the next frame shown (at most ``K - 1`` of them, back
 to the last keyframe), so a long keyframe interval saves less time than it
 saves space on a slow board. Repeat frames are neither decoded nor drawn.
 
+A partial delta costs its (smaller) inflate plus XOR over its changed bands
+only, and the players send only those rows: ``DirectPlayer`` sets the row
+window and writes each run of changed bands, and ``Player`` copies only those
+rows into the bitmap, so ``displayio`` refreshes only that area. After
+skipped frames both draw the union of the rows the skipped frames changed.
+``PlayStats.rows_updated`` counts the rows drawn. On these boards the display
+transfer is a large part of each frame, so clips that change little per
+frame (user interfaces, slides, animations on a still background) gain the
+most.
+
 How a frame reaches the display
 -------------------------------
 
 ``Player`` copies each decoded frame into a ``displayio.Bitmap`` with one
 ``bitmaptools.readinto()`` call; boards without it fall back to a much slower
-per-pixel loop.
+per-pixel loop. When only some rows changed (a partial delta), it reads those
+rows into a small scratch bitmap with ``readinto`` and copies it into place
+with ``bitmaptools.blit`` (``Bitmap.blit`` on CircuitPython 8), 8 rows at a
+time, so only those rows of the bitmap are marked dirty.
 
 * ``rgb565be``: a 65536-value bitmap drawn through
   ``ColorConverter(input_colorspace=Colorspace.RGB565_SWAPPED)``. The bitmap
@@ -214,7 +244,8 @@ per-pixel loop.
 
 ``DirectPlayer`` (experimental) skips ``displayio``: since RV565 bytes are
 already what an ST7789 expects, it sets the address window and sends each
-frame with one ``bus.send()``. ``rgb565be`` clips go to the panel as
+frame with one ``bus.send()``; for a partial delta it sends one row window
+(RASET) and one write per run of changed bands instead. ``rgb565be`` clips go to the panel as
 ``adafruit_st7789`` set it up; for ``rgb666`` clips it also switches the
 controller to 18-bit pixels (COLMOD ``0x66``) while playing and back to
 ``0x55`` afterwards (``restore_colmod=``; untested on a board). It should be considerably faster, but it needs
@@ -255,8 +286,11 @@ order and by random seeks, from bytes and from a file; every invalid file
 rejected when opened and indexed, or when decoded, as the manifest says) and
 against ``tests/data/testpattern.rv565``; that the bitmap shows the right
 colour for every pixel in each format ``Player`` supports (compared with the
-reference package's ``to_rgb888``); frame pacing, skipping and repeats; and
-the bytes ``DirectPlayer`` sends.
+reference package's ``to_rgb888``); each frame's ``changed_lines`` against
+the manifest; frame pacing, skipping and repeats; that partial deltas mark
+only their changed rows of the bitmap dirty; and, through a model of the
+panel's memory, that the windows and bytes ``DirectPlayer`` sends leave
+exactly the frame on the panel while sending fewer bytes for partial deltas.
 
 Submitting to the Community Bundle
 ----------------------------------

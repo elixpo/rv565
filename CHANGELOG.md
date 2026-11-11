@@ -108,6 +108,15 @@ API changes from 1.x (source-incompatible where noted):
   `mono`, and `DirectPlayer` sends `rgb565be` and `rgb666` (COLMOD 0x66);
   both skip repeat frames and name the supported formats for any other clip.
   The version 7 paths have not yet run on a board.
+- CircuitPython library: partial delta frames (type 3). The index checks
+  each partial delta's band height, band mask and stored size; decoding
+  inflates only the changed bands and XORs them in place into the reused
+  frame buffer. `Clip.changed_lines(i)` matches the reference and
+  `Clip.dirty_lines(since, i)` merges it over skipped frames. `DirectPlayer`
+  sends one row window and write per run of changed bands, `Player` copies
+  only the changed rows into the bitmap (`readinto` into a scratch band,
+  then `bitmaptools.blit`) so `displayio` refreshes only that area, and
+  `PlayStats.rows_updated` counts the rows drawn. Host-tested only.
 - Experimental CircuitPython library, `ports/circuitpython/`
   (`circuitpython_rv565`): reads version 6 files from a path, file object or
   bytes with a lazily built frame index, inflates with the built-in `zlib`,

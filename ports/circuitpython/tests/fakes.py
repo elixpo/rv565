@@ -21,6 +21,7 @@ class Bitmap:
         self.value_count = value_count
         self.values = [0] * (width * height)
         self.writes = 0
+        self.dirty_rows = set()  # rows written since the test last cleared it
 
     def __setitem__(self, index, value):
         if isinstance(index, tuple):
@@ -30,6 +31,7 @@ class Bitmap:
             raise ValueError("value out of range")
         self.values[index] = value
         self.writes += 1
+        self.dirty_rows.add(index // self.width)
 
     def __getitem__(self, index):
         if isinstance(index, tuple):
@@ -149,7 +151,20 @@ def readinto(bitmap, file, bits_per_pixel, element_size=1,
             bitmap[x, y] = value
 
 
-def install(with_readinto=True):
+def blit(dest_bitmap, source_bitmap, x, y, *, x1=0, y1=0, x2=None, y2=None,
+         skip_source_index=None, skip_dest_index=None):
+    """bitmaptools.blit (CircuitPython 9+): copy source[x1:x2, y1:y2] to
+    dest at (x, y); x2 and y2 are exclusive."""
+    x2 = source_bitmap.width if x2 is None else x2
+    y2 = source_bitmap.height if y2 is None else y2
+    if skip_source_index is not None or skip_dest_index is not None:
+        raise NotImplementedError("fake blit: skip indexes")
+    for sy in range(y1, y2):
+        for sx in range(x1, x2):
+            dest_bitmap[x + sx - x1, y + sy - y1] = source_bitmap[sx, sy]
+
+
+def install(with_readinto=True, with_blit=True):
     """Register fake displayio and bitmaptools modules; return displayio."""
     displayio = types.ModuleType("displayio")
     for name in ("Bitmap", "Colorspace", "ColorConverter", "Palette", "TileGrid",
@@ -158,6 +173,8 @@ def install(with_readinto=True):
     bitmaptools = types.ModuleType("bitmaptools")
     if with_readinto:
         bitmaptools.readinto = readinto
+    if with_blit:
+        bitmaptools.blit = blit
     sys.modules["displayio"] = displayio
     sys.modules["bitmaptools"] = bitmaptools
     return displayio
