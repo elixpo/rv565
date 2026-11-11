@@ -488,10 +488,11 @@ class Clip:
             return _partial_layout(head, self.lines, self.line_bytes)
         mask_end = 1 + ((self.lines + head[0] - 1) // head[0] + 7) // 8
         count = 0
-        for v in head[1:mask_end]:
-            while v:
-                count += v & 1
-                v >>= 1
+        for byte in head[1:mask_end]:
+            bits = byte
+            while bits:
+                count += bits & 1
+                bits >>= 1
         want = 2 * count
         if length - mask_end < want:
             want = max(0, length - mask_end)

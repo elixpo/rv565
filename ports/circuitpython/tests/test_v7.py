@@ -14,6 +14,7 @@ to_rgb888.
 
 import hashlib
 import importlib.util
+import io
 import json
 import random
 import struct
@@ -427,7 +428,6 @@ def square_frames(fmt, count=12):
 
 
 def square_clip(fmt="rgb565be", codec="zlib"):
-    import io
     frames = square_frames(fmt)
     out = io.BytesIO()
     REFERENCE.write(out, W, H, 12, frames, pixel_format=fmt, codec=codec,
