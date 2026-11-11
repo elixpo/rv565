@@ -5,6 +5,74 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+Version 2.0.0 of the C library reads RV565 format version 7
+(`docs/FORMAT.md`) and keeps reading version 6.
+
+- Format version 7 in the core (`rv565.h`): nine pixel formats
+  (`rv565_pixel_format_t`, `RV565_PIXEL_RGB565BE` … `RV565_PIXEL_MONO_VPAGE`),
+  codecs stored and zlib (`rv565_codec_t`), keyframe, delta and repeat
+  frames (`rv565_frame_type_t`) and the keyframe interval. Still
+  allocation-free; the zlib path still uses the ESP32 ROM tinfl or the
+  bundled one.
+- `rv565_open()` validates everything the spec checks at open time in its one
+  linear scan: reserved pixel format, codec or frame type, `K` = 0, a missing
+  keyframe at a multiple of `K`, a repeat with a body, a stored body that is
+  not `S` bytes, truncation and trailing bytes. Rates up to 60 FPS in
+  version 7 (30 in version 6).
+- New: `rv565_decode(clip, i, prev, dst, dst_len, scratch, scratch_len)`
+  (keyframe, delta against `prev`, repeat; in place with a scratch buffer
+  for zlib deltas, or between two buffers without one), `rv565_seek()`
+  (from the keyframe at or before a frame), `rv565_frame_type()`,
+  `rv565_keyframe_at_or_before()`, `rv565_row_bytes()`,
+  `rv565_bytes_per_pixel()`, and `rv565_scale_stripe_bpp()` for 1-, 2- and
+  3-byte pixels (packed formats are not scaled).
+- Player: deltas decode into the frame buffer that is not on screen, using
+  the presented frame as their base; repeats decode nothing and are not sent
+  to the display again; after a pacer skip the player applies the skipped
+  records the delta chain needs (at most `K` − 1) without showing them.
+  `rv565_frame_stats_t` gains `decoded` and `sent`. Only RGB565 big-endian
+  clips play (the bundled ST7789 drivers run the panel in RGB565); other
+  formats return `RV565_ERR_UNSUPPORTED` from `rv565_player_init()`.
+- `rv565_check_schedule()` models repeats as costing no decode, and applies
+  the cost model to the body length (type byte excluded).
+- MicroPython module (`ports/micropython`): `inflate_delta(body, prev, frame[,
+  scratch])`, `xor_frame(frame, other)` and `FORMAT_VERSION`;
+  `inflate_frame()` is unchanged.
+- Tests: `tests/test_conformance.c` and `tests/check_conformance.py` decode
+  every vector in `tests/data/v7` in order (in place and between two
+  buffers) and by seeking, compare each frame's SHA-256 with the manifest,
+  and check that every invalid file is rejected at the right stage with the
+  matching status. `make -C tests` runs them, and the player test now plays
+  the rgb565be vectors. CI also runs the tests under ASan/UBSan and checks
+  the vectors with `tools/make_conformance.py --check`.
+
+API changes from 1.x (source-incompatible where noted):
+
+- `rv565_header_t` gains `version`, `header_size`, `pixel_format`, `codec`
+  and `keyframe_interval`. Code that fills a header by hand must set them.
+- `rv565_frame_bytes()` is a function instead of a static inline and follows
+  the pixel format.
+- `RV565_MAX_FPS` is 60 (version 7); `RV565_MAX_FPS_V6` is 30.
+  `RV565_HEADER_SIZE` is replaced by `RV565_HEADER_SIZE_V6` (12) and
+  `RV565_HEADER_SIZE_V7` (16, the minimum).
+- `rv565_clip_t.index[i]` points just past each record's length: at the type
+  byte in version 7. `rv565_payload()` returns the body without the type
+  byte (length 0 for a repeat).
+- `rv565_decode_frame(clip, i, dst, len)` decodes in place: a keyframe on its
+  own, otherwise `dst` must hold frame i−1, and a zlib delta returns
+  `RV565_ERR_ARG` (use `rv565_decode()` with scratch or two buffers).
+- `rv565_parse_header()` returns `RV565_ERR_TRUNCATED` (not
+  `RV565_ERR_ARG`) for fewer than 12 bytes.
+- New status codes: `RV565_ERR_FORMAT`, `RV565_ERR_KEYFRAME`,
+  `RV565_ERR_RECORD`, `RV565_ERR_UNSUPPORTED`.
+- `rv565_decoder_ops_t.start` takes the previous frame:
+  `start(ctx, index, prev, dst, dst_len)`, and the struct gains an optional
+  `decode` hook for the serial path. Backends call `rv565_decode(clip,
+  index, prev, dst, dst_len, NULL, 0)`.
+- `rv565_player_t`: `frames[1]` is required for clips with zlib deltas,
+  even on the serial path; the state fields `ready_frame` and the meaning of
+  `current` changed (`held[]`, `gen[]`, `sent`, `sent_gen`).
+
 - Experimental CircuitPython library, `ports/circuitpython/`
   (`circuitpython_rv565`): reads version 6 files from a path, file object or
   bytes with a lazily built frame index, inflates with the built-in `zlib`,
