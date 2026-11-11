@@ -60,20 +60,48 @@ Version 2.0.0 of the C library reads RV565 format version 7
   the presented frame as their base; repeats decode nothing and are not sent
   to the display again; after a pacer skip the player applies the skipped
   records the delta chain needs (at most `K` − 1) without showing them.
-  `rv565_frame_stats_t` gains `decoded` and `sent`. Only RGB565 big-endian
-  clips play (the bundled ST7789 drivers run the panel in RGB565); other
-  formats return `RV565_ERR_UNSUPPORTED` from `rv565_player_init()`.
+  `rv565_frame_stats_t` gains `decoded` and `rows_sent`. Only RGB565
+  big-endian clips play (the bundled ST7789 drivers run the panel in
+  RGB565); other formats return `RV565_ERR_UNSUPPORTED` from
+  `rv565_player_init()`.
+- Partial deltas (frame type 3) with band shifts in the core:
+  `rv565_open()` validates them in its scan (`RV565_ERR_PARTIAL` for a band
+  height of 0, a short mask, no band or a band past the frame, missing
+  shifts or a shift of `B` lines or more; `RV565_ERR_RECORD` for stored data
+  of the wrong size). `rv565_decode()` builds each changed band as its
+  shifted prediction XOR its residual: in place it writes only the changed
+  bands and needs no band copy (zlib residuals go through `scratch`, at most
+  `S` bytes); between two buffers it writes the whole frame without scratch.
+  New: `rv565_changed_lines()` (the changed line runs of a frame, without
+  decoding), `rv565_frame_lines()` (`P` and `R`), and, for readers that parse
+  the container themselves, `rv565_partial_runs()` and
+  `rv565_apply_partial()` on a raw body.
+- The player sends only what changed: it tracks the frame on the panel and,
+  for a partial delta, transfers only the panel rows scaled from its changed
+  lines, one row window per run, through the new optional
+  `rv565_display_ops_t.begin_rows`; keyframes and full deltas send the whole
+  frame, repeats nothing, and after skips the envelope of the changes is
+  sent. The ESP32 and RP2 ST7789 ports implement `begin_rows` with RASET
+  (`rv565_st7789_rows()` in `port/st7789_init.h`) and restore the full
+  window for the next whole frame; the TFT_eSPI and LovyanGFX examples
+  implement it with `setAddrWindow`. Without `begin_rows` every change is a
+  whole-frame write. A clip with zlib partial deltas needs `frames[1]`.
 - `rv565_check_schedule()` models repeats as costing no decode, and applies
   the cost model to the body length (type byte excluded).
 - MicroPython module (`ports/micropython`): `inflate_delta(body, prev, frame[,
-  scratch])`, `xor_frame(frame, other)` and `FORMAT_VERSION`;
-  `inflate_frame()` is unchanged.
+  scratch])`, `xor_frame(frame, other)`, `apply_partial(body, frame,
+  line_bytes, zlib[, scratch])` (applies a partial delta in place and returns
+  its changed line runs) and `FORMAT_VERSION`; `inflate_frame()` is
+  unchanged. The module now links `src/rv565.c`.
 - Tests: `tests/test_conformance.c` and `tests/check_conformance.py` decode
   every vector in `tests/data/v7` in order (in place and between two
   buffers) and by seeking, compare each frame's SHA-256 with the manifest,
   and check that every invalid file is rejected at the right stage with the
-  matching status. `make -C tests` runs them, and the player test now plays
-  the rgb565be vectors. CI also runs the tests under ASan/UBSan and checks
+  matching status, and compare `rv565_changed_lines()` with each frame's
+  changed lines. `make -C tests` runs them. The player test plays the
+  rgb565be vectors and synthetic stored and zlib clips with scattered bands
+  and shifts, checks the panel after every frame and the exact number of
+  rows sent. CI also runs the tests under ASan/UBSan and checks
   the vectors with `tools/make_conformance.py --check`.
 
 API changes from 1.x (source-incompatible where noted):
@@ -94,14 +122,15 @@ API changes from 1.x (source-incompatible where noted):
 - `rv565_parse_header()` returns `RV565_ERR_TRUNCATED` (not
   `RV565_ERR_ARG`) for fewer than 12 bytes.
 - New status codes: `RV565_ERR_FORMAT`, `RV565_ERR_KEYFRAME`,
-  `RV565_ERR_RECORD`, `RV565_ERR_UNSUPPORTED`.
+  `RV565_ERR_RECORD`, `RV565_ERR_UNSUPPORTED`, `RV565_ERR_PARTIAL`.
+- `rv565_display_ops_t` gains `begin_rows` (last member, optional).
 - `rv565_decoder_ops_t.start` takes the previous frame:
   `start(ctx, index, prev, dst, dst_len)`, and the struct gains an optional
   `decode` hook for the serial path. Backends call `rv565_decode(clip,
   index, prev, dst, dst_len, NULL, 0)`.
-- `rv565_player_t`: `frames[1]` is required for clips with zlib deltas,
-  even on the serial path; the state fields `ready_frame` and the meaning of
-  `current` changed (`held[]`, `gen[]`, `sent`, `sent_gen`).
+- `rv565_player_t`: `frames[1]` is required for clips with zlib deltas or
+  zlib partial deltas, even on the serial path; the state fields changed
+  (`ready_frame` is gone; `current`, `held[]`, `shown`).
 
 - CircuitPython library 2.0.0 (`ports/circuitpython/`): reads format
   version 7 as well as version 6, with every pixel format, the stored and

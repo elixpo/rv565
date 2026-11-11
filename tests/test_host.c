@@ -106,7 +106,7 @@ static void v7_checks(void)
     EXPECT(rv565_scale_stripe_bpp(f0, 2, 3, xmap, 4, ymap, 0, 4, stripe) == RV565_OK &&
            memcmp(stripe + 45, f0 + 9, 3) == 0 && memcmp(stripe + 9, f0 + 3, 3) == 0, "scale 3 bytes/pixel");
     EXPECT(rv565_scale_stripe_bpp(f0, 2, 0, xmap, 4, ymap, 0, 4, stripe) == RV565_ERR_ARG, "packed formats not scaled");
-    for (int s = RV565_ERR_UNSUPPORTED; s <= RV565_OK; ++s) {
+    for (int s = RV565_ERR_PARTIAL; s <= RV565_OK; ++s) {
         EXPECT(strcmp(rv565_strerror((rv565_status_t)s), "unknown error") != 0, "every status has a message");
     }
 }

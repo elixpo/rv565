@@ -18,6 +18,7 @@ static struct {
     rv565_rp2_display_config_t cfg;
     unsigned command_hz;
     int dma;
+    int windowed;      /* a row window is set; restore before a full frame */
 } disp;
 
 static void spi_bytes(const uint8_t *data, size_t length)
@@ -37,16 +38,43 @@ static void command(uint8_t cmd, const uint8_t *data, size_t length)
     gpio_put(disp.cfg.pin_cs, 1);
 }
 
-static void begin_frame(void *ctx)
+/* Commands at the safe rate: an optional RASET, then RAMWR; pixel data
+ * follows at the full rate. */
+static void start_write(const uint8_t *raset)
 {
-    (void)ctx;
     const uint8_t ramwr = RV565_ST7789_RAMWR;
     spi_set_baudrate(disp.spi, disp.command_hz);
+    if (raset != NULL) {
+        command(RV565_ST7789_RASET, raset, 4);
+    }
     gpio_put(disp.cfg.pin_cs, 0);
     gpio_put(disp.cfg.pin_dc, 0);
     spi_bytes(&ramwr, 1);
     gpio_put(disp.cfg.pin_dc, 1);
     spi_set_baudrate(disp.spi, (unsigned)disp.cfg.clock_hz);
+}
+
+static void begin_frame(void *ctx)
+{
+    (void)ctx;
+    uint8_t raset[4];
+    if (disp.windowed) {
+        rv565_st7789_rows(&disp.cfg.panel, 0, rv565_panel_resolve(&disp.cfg.panel).height, raset);
+        disp.windowed = 0;
+        start_write(raset);
+    } else {
+        start_write(NULL);
+    }
+}
+
+/* Partial update: only rows first .. first + rows - 1 (full width). */
+static void begin_rows(void *ctx, uint16_t first, uint16_t rows)
+{
+    (void)ctx;
+    uint8_t raset[4];
+    rv565_st7789_rows(&disp.cfg.panel, first, rows, raset);
+    disp.windowed = 1;
+    start_write(raset);
 }
 
 /* The player keeps at most one stripe in flight when it queues the next, so
@@ -90,6 +118,7 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
     }
     disp.cfg = *cfg;
     disp.spi = cfg->spi_index == 0 ? spi0 : spi1;
+    disp.windowed = 0;
 
     /* Command bytes (the init sequence and each frame's RAMWR) go out at a
      * safe rate: at tens of MHz the panel misreads them, measured on a Pico 2.
@@ -139,6 +168,7 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
     ops->queue_stripe = queue_stripe;
     ops->wait_stripe = wait_stripe;
     ops->end_frame = end_frame;
+    ops->begin_rows = begin_rows;
     return RV565_OK;
 }
 
