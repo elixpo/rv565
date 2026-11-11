@@ -7,8 +7,10 @@
  *   seek  each frame on its own with rv565_seek (from its keyframe)
  *
  * Output lines: "open <status>", then on success "header ...", "types ...",
+ * "lines <i> <first>:<count> ..." (rv565_changed_lines per frame),
  * "<mode> <i> <sha256>" or "<mode>-error <i> <status>", and for a clip with
- * zlib deltas "noscratch <status>" from an in-place decode without scratch.
+ * zlib deltas or partial deltas "noscratch <status>" from an in-place decode
+ * without scratch.
  * Usage: test_conformance file.rv565 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,6 +114,19 @@ int main(int argc, char **argv)
     printf("types");
     for (uint16_t i = 0; i < h->frames; ++i) printf(" %d", rv565_frame_type(&clip, i));
     printf("\n");
+    static rv565_line_run_t runs[65536];
+    for (uint16_t i = 0; i < h->frames; ++i) {
+        size_t count = 0, few = 0;
+        const rv565_status_t s = rv565_changed_lines(&clip, i, runs, 65536, &count);
+        printf("lines %u", i);
+        if (s != RV565_OK) printf(" error:%d", (int)s);
+        for (size_t r = 0; r < count; ++r) printf(" %u:%u", runs[r].first, runs[r].count);
+        printf("\n");
+        /* Too small an array: the count is still reported. */
+        if (count > 0 && (rv565_changed_lines(&clip, i, runs, 0, &few) != RV565_ERR_ARG || few != count)) {
+            printf("lines-error %u -1\n", i);  /* count not reported with a small array */
+        }
+    }
 
     /* Odd offsets make the XOR take its bytewise path for one of the runs. */
     uint8_t *a = malloc(fb + 1), *b = malloc(fb + 1), *scratch = malloc(fb);
@@ -128,7 +143,8 @@ int main(int argc, char **argv)
     }
     /* In place without scratch: fine for everything but a zlib delta. */
     for (uint16_t i = 0; i < h->frames; ++i) {
-        if (rv565_frame_type(&clip, i) == RV565_FRAME_DELTA && h->codec == RV565_CODEC_ZLIB) {
+        const int type = rv565_frame_type(&clip, i);
+        if ((type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL) && h->codec == RV565_CODEC_ZLIB) {
             printf("noscratch %d\n", (int)rv565_decode_frame(&clip, i, a, fb));
             break;
         }
