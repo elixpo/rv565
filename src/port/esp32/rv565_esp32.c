@@ -157,7 +157,7 @@ uint32_t rv565_esp32_micros(void)
 
 /* Inflate worker -------------------------------------------------------- */
 
-typedef struct { uint16_t index; uint8_t *dst; size_t len; } job_t;
+typedef struct { uint16_t index; const uint8_t *prev; uint8_t *dst; size_t len; } job_t;
 typedef struct { rv565_status_t status; uint32_t inflate_us; } result_t;
 
 static struct {
@@ -174,16 +174,17 @@ static void worker(void *arg)
         xQueueReceive(work.jobs, &job, portMAX_DELAY);
         const uint32_t start = rv565_esp32_micros();
         result_t r;
-        r.status = rv565_decode_frame(work.clip, job.index, job.dst, job.len);
+        /* The player passes prev != dst, so no scratch buffer is needed. */
+        r.status = rv565_decode(work.clip, job.index, job.prev, job.dst, job.len, NULL, 0);
         r.inflate_us = rv565_esp32_micros() - start;
         xQueueSend(work.results, &r, portMAX_DELAY);
     }
 }
 
-static void dec_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+static void dec_start(void *ctx, uint16_t index, const uint8_t *prev, uint8_t *dst, size_t len)
 {
     (void)ctx;
-    const job_t job = { index, dst, len };
+    const job_t job = { index, prev, dst, len };
     xQueueSend(work.jobs, &job, portMAX_DELAY);
 }
 
@@ -215,6 +216,7 @@ rv565_status_t rv565_esp32_decoder_init(const rv565_clip_t *clip, int core,
     ops->ctx = NULL;
     ops->start = dec_start;
     ops->finish = dec_finish;
+    ops->decode = NULL;
     return RV565_OK;
 }
 

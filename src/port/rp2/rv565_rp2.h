@@ -3,7 +3,11 @@
  *
  * Measured on a Pico 2 (RP2350): 24 FPS with dual-core decoding, cost model
  * RV565_COST_RP2350_180x135; see docs/RESULTS_RP2350.md. The RP2040 build
- * compiles but has not been run on hardware. */
+ * compiles but has not been run on hardware.
+ *
+ * The ST7789 runs in RGB565 mode, so clips must be rgb565be (any codec,
+ * keyframes, deltas and repeats); rv565_player_init() rejects other pixel
+ * formats with RV565_ERR_UNSUPPORTED. */
 #ifndef RV565_RP2_H
 #define RV565_RP2_H
 

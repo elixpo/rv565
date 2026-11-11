@@ -161,6 +161,7 @@ static uint32_t core1_stack[CORE1_STACK_WORDS];
 static struct {
     const rv565_clip_t *clip;
     volatile uint16_t index;
+    const uint8_t *volatile prev;
     uint8_t *volatile dst;
     volatile size_t len;
     volatile rv565_status_t status;
@@ -172,17 +173,19 @@ static void core1_main(void)
     for (;;) {
         (void)multicore_fifo_pop_blocking();
         const uint32_t start = time_us_32();
-        work.status = rv565_decode_frame(work.clip, work.index, work.dst, work.len);
+        /* The player passes prev != dst, so no scratch buffer is needed. */
+        work.status = rv565_decode(work.clip, work.index, work.prev, work.dst, work.len, NULL, 0);
         work.inflate_us = time_us_32() - start;
         __dmb();
         multicore_fifo_push_blocking(1);
     }
 }
 
-static void dec_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+static void dec_start(void *ctx, uint16_t index, const uint8_t *prev, uint8_t *dst, size_t len)
 {
     (void)ctx;
     work.index = index;
+    work.prev = prev;
     work.dst = dst;
     work.len = len;
     __dmb();
@@ -210,6 +213,7 @@ rv565_status_t rv565_rp2_decoder_init(const rv565_clip_t *clip, rv565_decoder_op
     ops->ctx = NULL;
     ops->start = dec_start;
     ops->finish = dec_finish;
+    ops->decode = NULL;
     return RV565_OK;
 }
 
