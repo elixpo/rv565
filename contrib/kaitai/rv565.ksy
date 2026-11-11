@@ -20,10 +20,12 @@ doc: |
 
   Version 7: the header adds its own size, a pixel format, a codec (stored
   or zlib) and a keyframe interval K. Each record starts with a frame type:
-  a keyframe (the frame), a delta (the frame XOR the previous frame) or a
-  repeat (no body, the previous frame again). Bodies of keyframes and
-  deltas are the frame bytes as they are, or a zlib stream of them. Every
-  frame i with i mod K = 0 is a keyframe.
+  a keyframe (the frame), a delta (the frame XOR the previous frame), a
+  repeat (no body, the previous frame again) or a partial delta (only the
+  bands of lines that changed, each a residual against the previous frame's
+  band shifted by a few bytes and lines). Bodies of keyframes and deltas,
+  and the residuals of partial deltas, are the bytes as they are or a zlib
+  stream of them. Every frame i with i mod K = 0 is a keyframe.
 doc-ref:
   - https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
   - https://arxiv.org/abs/2610.35935
@@ -69,6 +71,11 @@ instances:
     value: 'version == 7 ? header_v7.codec : codec::zlib'
   keyframe_interval:
     value: 'version == 7 ? header_v7.keyframe_interval : 1'
+  lines:
+    value: 'pixel_format == pixel_format::mono_vpage ? (height + 7) / 8 : height'
+    doc: |
+      Lines of a frame, the unit of partial delta bands: pixel rows, or
+      pages of 8 rows for mono_vpage.
 types:
   header_v7:
     seq:
@@ -110,20 +117,80 @@ types:
       - id: body_zlib
         size: len_body
         process: zlib
-        if: _root.codec == codec::zlib and len_body > 0
+        if: _root.codec == codec::zlib and kind != frame_type::partial and len_body > 0
         doc: |
           Inflated: exactly the frame size of the pixel format, the frame
           (keyframe) or its XOR with the previous frame (delta).
       - id: body_stored
         size: len_body
-        if: _root.codec == codec::stored
+        if: _root.codec == codec::stored and kind != frame_type::partial
         doc: The frame, or its XOR with the previous frame; empty for a repeat.
+      - id: body_partial
+        size: len_body
+        type: partial_delta
+        if: kind == frame_type::partial
     instances:
       len_body:
         value: '_root.version == 7 ? len_record - 1 : len_record'
       kind:
         value: '_root.version == 7 ? frame_type : frame_type::key'
         doc: The frame type; every version 6 frame is a keyframe.
+  partial_delta:
+    doc: |
+      The frame is _root.lines lines of R bytes, divided into bands of
+      band_height lines (the last may be shorter). Byte j of line y of a
+      changed band is predicted from byte j - dx of line y - dy of the
+      previous frame when that line is in the same band and 0 <= j - dx < R,
+      and is 0 otherwise; the band is its prediction XOR its residual. Bands
+      not in the mask are unchanged.
+    meta:
+      bit-endian: le
+    seq:
+      - id: band_height
+        type: u1
+        valid:
+          min: 1
+      - id: mask
+        type: b1
+        repeat: expr
+        repeat-expr: num_bands
+        doc: |
+          One bit per band, least significant bit first; at least one is
+          set. The padding bits of the last byte are zero.
+      - id: shifts
+        type: band_shift(mask[_index], band_height)
+        repeat: expr
+        repeat-expr: num_bands
+        doc: A shift for each changed band, in band order.
+      - id: residuals_zlib
+        size-eos: true
+        process: zlib
+        if: _root.codec == codec::zlib
+        doc: Inflated, the residuals of the changed bands, concatenated.
+      - id: residuals_stored
+        size-eos: true
+        if: _root.codec == codec::stored
+        doc: The residuals of the changed bands, concatenated.
+    instances:
+      num_bands:
+        value: (_root.lines + band_height - 1) / band_height
+  band_shift:
+    params:
+      - id: changed
+        type: bool
+      - id: band_height
+        type: u1
+    seq:
+      - id: dx
+        type: s1
+        if: changed
+        doc: Shift along the line, in bytes.
+      - id: dy
+        type: s1
+        if: changed
+        valid:
+          expr: _ > -band_height and _ < band_height
+        doc: Shift across lines, less than the band height either way.
 enums:
   pixel_format:
     0:
@@ -162,3 +229,4 @@ enums:
     0: key
     1: delta
     2: repeat
+    3: partial

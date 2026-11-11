@@ -39,9 +39,10 @@ to exactly width × height × 2 bytes of big-endian RGB565 pixels.
 pixel format (RGB565 big- or little-endian, packed RGB444, RGB666, RGB888,
 8- or 4-bit grayscale, 1-bit monochrome in rows or in 8-row pages), a codec
 (stored or zlib) and a keyframe interval. Each record starts with a frame
-type: a keyframe, a delta (XOR with the previous frame) or a repeat. Every
-frame at a multiple of the keyframe interval is a keyframe, so seeking needs
-no scan.
+type: a keyframe, a delta (XOR with the previous frame), a repeat, or a
+partial delta (only the bands of lines that changed, each a residual against
+the previous frame's band shifted by a few bytes and lines). Every frame at a
+multiple of the keyframe interval is a keyframe, so seeking needs no scan.
 
 ## Internal signatures
 
