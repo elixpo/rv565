@@ -115,6 +115,12 @@ API changes from 1.x (source-incompatible where noted):
   bus (`DirectPlayer`), paced to the clip's rate with frame skipping. Host
   tests with CPython and fake `displayio`; not yet run on a board. Expect a
   few FPS ([#30](https://github.com/elixpo/rv565/issues/30)).
+- `contrib/`: the FFmpeg patches (now two, `avcodec` and `avformat`) read
+  and write format version 7, with every pixel format, stored or zlib frames,
+  keyframe/delta/repeat frames and keyframe seeking, and still read and write
+  version 6; they pass the `tests/data/v7` conformance vectors and FATE. The
+  `file(1)`, shared-mime-info, PRONOM and Kaitai Struct signatures recognise
+  version 7 as well as version 6.
 
 ## 1.2.0 — 2026-11-04
 
