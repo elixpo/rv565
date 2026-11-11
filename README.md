@@ -256,7 +256,18 @@ OreoOS under MIT.
   [PlatformIO Registry](https://registry.platformio.org/libraries/elixpo/RV565)
 - [ESP Component Registry](https://components.espressif.com/components/elixpo/rv565)
 - [PyPI](https://pypi.org/project/rv565/)
+- CircuitPython: [elixpo/CircuitPython_RV565](https://github.com/elixpo/CircuitPython_RV565),
+  on [PyPI](https://pypi.org/project/circuitpython-rv565/) and
+  [Read the Docs](https://circuitpython-rv565.readthedocs.io)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+
+**Written about**
+
+- Adafruit blog:
+  [*RV565: frame-independent RGB565 video for ESP32-S3 and RP2350 SPI displays*](https://blog.adafruit.com/2026/11/10/rv565-frame-independent-rgb565-video-for-esp32-s3-and-rp2350-spi-displays/)
+  (10 Nov 2026)
+- How it started, in OreoOS's Gallery:
+  [*From 0.5 FPS to Native Video*](https://blogs.elixpo.com/elixpohere/esp32s3-spiderman)
 - Write-up of the Pico 2 port:
   [*The Screen Was Blank*](https://blogs.elixpo.com/elixpohere/rv565-pico-2-tweak)
 
@@ -266,11 +277,24 @@ OreoOS under MIT.
   [FFmpeg #25653](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/25653)
 - The `video/x-rv565` MIME type in freedesktop shared-mime-info:
   [!449](https://gitlab.freedesktop.org/xdg/shared-mime-info/-/merge_requests/449)
-- A `file(1)` magic entry: [bugs.astron.com #819](https://bugs.astron.com/view.php?id=819)
+- A `file(1)` magic entry: [bugs.astron.com #819](https://bugs.astron.com/view.php?id=819),
+  with the patch in [#822](https://bugs.astron.com/view.php?id=822)
 - PRONOM, the National Archives' format registry:
   [PRONOM_Research #202](https://github.com/digital-preservation/PRONOM_Research/pull/202)
-- [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67) and
-  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92)
+- A Kaitai Struct format description:
+  [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
+- An Arduino_GFX example: [Arduino_GFX #823](https://github.com/moononournation/Arduino_GFX/pull/823)
+- The CircuitPython Community Bundle:
+  [CircuitPython_Community_Bundle #292](https://github.com/adafruit/CircuitPython_Community_Bundle/pull/292)
+- Pico SDK documentation of the SPI inter-frame gap found while porting:
+  [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
+- A proposed article for the Espressif Developer Portal:
+  [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)
+- Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67),
+  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92),
+  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235),
+  [awesome-raspberry-pi #371](https://github.com/thibmaek/awesome-raspberry-pi/pull/371) and
+  [awesome-circuitpython #63](https://github.com/adafruit/awesome-circuitpython/pull/63)
 
 Using RV565 in a project? Tell us in
 [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell)
