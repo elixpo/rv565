@@ -298,6 +298,8 @@ OreoOS under MIT.
 - CircuitPython: [elixpo/CircuitPython_RV565](https://github.com/elixpo/CircuitPython_RV565),
   on [PyPI](https://pypi.org/project/circuitpython-rv565/) and
   [Read the Docs](https://circuitpython-rv565.readthedocs.io)
+  and in the [CircuitPython Community Bundle](https://github.com/adafruit/CircuitPython_Community_Bundle)
+  (`circup install circuitpython_rv565`)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
 
 **Written about**
@@ -323,8 +325,6 @@ OreoOS under MIT.
 - A Kaitai Struct format description:
   [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
 - An Arduino_GFX example: [Arduino_GFX #823](https://github.com/moononournation/Arduino_GFX/pull/823)
-- The CircuitPython Community Bundle:
-  [CircuitPython_Community_Bundle #292](https://github.com/adafruit/CircuitPython_Community_Bundle/pull/292)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
 - A proposed article for the Espressif Developer Portal:
