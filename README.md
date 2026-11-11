@@ -6,21 +6,36 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2610.35935-b31b1b.svg)](https://arxiv.org/abs/2610.35935)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23543367-blue.svg)](https://doi.org/10.5281/zenodo.23543367)
 
-Frame-independent RGB565 video for microcontroller displays, with a dual-core
-decode and DMA pipeline.
+Video for microcontroller displays, with a dual-core decode and DMA
+pipeline.
 
-RV565 plays video on SPI panels such as the ST7789 from small, simple files:
-every frame is an independent zlib stream whose decoded bytes are already the
-panel's native RGB565. That makes three things possible on a microcontroller:
+RV565 plays video on small displays from simple files whose decoded bytes are
+already the panel's native pixels, so the device only decompresses and
+transfers. Format version 7 (RV565 2.0) declares the pixel format in the
+header: RGB565 in either byte order, RGB444, RGB666 and RGB888 for colour
+TFTs, 8- and 4-bit grayscale, and 1-bit monochrome in rows (e-paper, memory
+LCDs) or in pages (SSD1306-class OLEDs). Frames are stored or zlib-compressed
+keyframes, exact XOR deltas or repeats, with a keyframe at least every `K`
+frames ([specification](docs/FORMAT.md)). Version 6 files, every frame an
+independent zlib stream of RGB565, still play.
 
-- **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2):
-  core 1 inflates the next frame while core 0 scales and DMA-transfers the
-  current one, so frame time equals the display transfer (98.1% of the SPI
-  bound on both).
+- **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2),
+  measured with version 6: core 1 inflates the next frame while core 0 scales
+  and DMA-transfers the current one, so frame time equals the display
+  transfer (98.1% of the SPI bound on both).
+- **Small, exact files**: with deltas and one keyframe per second, the
+  paper's two film windows are 1.8–5.5× smaller than in version 6, still
+  pixel-exact; on one of them the file is smaller than MJPEG at its best
+  quality ([file sizes](docs/RESULTS_V7.md); version 7 playback timings are
+  not measured yet).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.
-- **O(1) seeking and local error recovery**: no frame depends on another.
+- **Fast seeking and local error recovery**: any frame is at most `K` − 1
+  records from a keyframe (`K` = 1 makes every frame independent).
+- **Tested without hardware**: every implementation decodes the same
+  conformance files (`tests/data/v7`) in CI and must match each frame's
+  SHA-256.
 
 The design and measurements are described in
 *RV565: Cross-Layer Co-Design for Frame-Independent Video Playback on
@@ -50,12 +65,11 @@ MicroPython-Class ESP32-S3 Systems*
 
 **What you can rely on**
 
-- **The format is frozen.** Version 6 is covered by the 1.x compatibility
-  promise: a clip you make today plays on every 1.x release
-  ([specification](docs/FORMAT.md)).
+- **Files keep playing.** Version 7 is covered by the 2.x compatibility
+  promise, and 2.x still plays version 6 files. For players still on 1.x,
+  write version 6 with `rv565 encode --v6` ([specification](docs/FORMAT.md)).
 - **Damaged files are rejected, not drawn.** Readers validate the header and
-  every frame, and a frame only counts if it decodes to exactly its RGB565
-  size.
+  every record, and a frame only counts if it decodes to exactly its size.
 - **Verified hardware:** the ESP32-S3 and the RP2350, each with a 320x240
   ST7789, play 24 FPS clips with zero missed deadlines using dual-core
   decoding. Other boards and panels should work with the same code but have
@@ -146,6 +160,10 @@ Encode a clip on your computer (needs FFmpeg), then check it:
 ```bash
 python3 tools/rv565.py encode input.mp4 clip.rv565 --size 180x135 --fps 24
 python3 tools/rv565.py info clip.rv565      # sizes and predicted late frames
+
+# Other displays: pick the pixel format the panel takes
+python3 tools/rv565.py encode input.mp4 oled.rv565 --size 128x64 --fps 15 --format mono_vpage
+python3 tools/rv565.py encode input.mp4 old.rv565 --v6   # for players older than 2.0
 python3 tools/rv565.py c-array clip.rv565 clip.h   # for Arduino sketches
 ```
 
@@ -177,13 +195,34 @@ for (;;) {
 }
 ```
 
-Leave `player.decoder` empty to use the single-core serial path.
+Leave `player.decoder` empty to use the single-core serial path. The player
+plays RGB565 big-endian clips, version 7 (keyframes, XOR deltas and repeats,
+zlib or stored) and version 6; it needs `player.frames[1]` for dual-core
+decoding and for clips with zlib deltas, sends nothing for a repeat frame,
+and returns `RV565_ERR_UNSUPPORTED` for other pixel formats, since the
+bundled ST7789 drivers run the panel in RGB565.
+
+For any of the nine pixel formats (your own display code, or a monochrome
+OLED), decode frames yourself:
+
+```c
+uint8_t *frame = ..., *scratch = ...;   // rv565_frame_bytes(&clip.header) each
+rv565_seek(&clip, 0, frame, size, scratch, size);            // frame 0
+for (uint16_t i = 1; i < clip.header.frames; ++i) {
+    // in place; scratch is used only for zlib deltas
+    rv565_decode(&clip, i, frame, frame, size, scratch, size);
+}
+```
+
+`rv565_decode(clip, i, prev, dst, ...)` with two buffers (`prev != dst`)
+needs no scratch; `rv565_seek` jumps to any frame from the keyframe at or
+before it, at most K−1 records away.
 
 ## Layout
 
 ```
 src/                 portable core, player, and platform ports (Arduino src/)
-  rv565.[ch]         container parsing, validation, inflate, scaling, cost model
+  rv565.[ch]         container parsing (versions 6 and 7), validation, decode, scaling, cost model
   rv565_player.[ch]  stripe pipeline with optional second-core decoding
   port/esp32/        SPI GDMA display + FreeRTOS core-1 worker
   port/rp2/          SPI DMA display + multicore worker
@@ -194,7 +233,7 @@ examples_pico/       Pico SDK example project
 ports/circuitpython/ CircuitPython library (experimental, pure Python)
 ports/micropython/   MicroPython user C module
 tools/rv565.py       encoder and inspection CLI
-tests/               host tests (make -C tests)
+tests/               host tests and the format conformance check (make -C tests)
 benchmarks/          the paper's standalone ESP32-S3 benchmark and collectors
 docs/                format specification, architecture notes, ecosystem plan
 ```
@@ -259,6 +298,8 @@ OreoOS under MIT.
 - CircuitPython: [elixpo/CircuitPython_RV565](https://github.com/elixpo/CircuitPython_RV565),
   on [PyPI](https://pypi.org/project/circuitpython-rv565/) and
   [Read the Docs](https://circuitpython-rv565.readthedocs.io)
+  and in the [CircuitPython Community Bundle](https://github.com/adafruit/CircuitPython_Community_Bundle)
+  (`circup install circuitpython_rv565`)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
 - Listed in [Awesome Raspberry Pi](https://github.com/thibmaek/awesome-raspberry-pi#projects)
 
@@ -285,8 +326,6 @@ OreoOS under MIT.
 - A Kaitai Struct format description:
   [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
 - An Arduino_GFX example: [Arduino_GFX #823](https://github.com/moononournation/Arduino_GFX/pull/823)
-- The CircuitPython Community Bundle:
-  [CircuitPython_Community_Bundle #292](https://github.com/adafruit/CircuitPython_Community_Bundle/pull/292)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
 - A proposed article for the Espressif Developer Portal:

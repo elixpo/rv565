@@ -4,17 +4,38 @@ circuitpython-rv565
 Play `RV565 <https://github.com/elixpo/rv565>`_ video files on CircuitPython
 displays.
 
-RV565 stores video as independently zlib-compressed frames whose decoded
-bytes are already big-endian RGB565, the native pixel format of ST7789-class
-SPI panels (`format specification
+RV565 stores video as frames whose decoded bytes are already in the
+display's native pixel format (`format specification
 <https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md>`_,
 `arXiv:2610.35935 <https://arxiv.org/abs/2610.35935>`_). This library reads
-them in pure Python with CircuitPython's built-in ``zlib`` and shows them with
-``displayio``.
+them in pure Python, inflating with CircuitPython's built-in ``zlib``, and
+shows them with ``displayio`` or straight over an ST7789's bus.
 
-**Status: experimental.** It passes host tests against the RV565 test vector
-(every frame matches CPython's zlib) and plays on a Raspberry Pi Pico 2
-under CircuitPython 10.3.1 (measurements below).
+Version 2.0 reads **format version 7**: all nine pixel formats (``rgb565be``,
+``rgb565le``, ``rgb444``, ``rgb666``, ``rgb888``, ``gray8``, ``gray4``,
+``mono``, ``mono_vpage``), both codecs (stored and zlib), and keyframes, XOR
+delta frames and repeat frames with seeking through the keyframe interval.
+Version 6 files (RGB565 big-endian, zlib, every frame a keyframe) still
+read. Which formats each player can show:
+
+=================  ==================================================
+Player             Pixel formats
+=================  ==================================================
+``Player``         ``rgb565be``, ``rgb565le``, ``gray8``, ``gray4``,
+                   ``mono``
+``DirectPlayer``   ``rgb565be``, ``rgb666`` (ST7789 in 18-bit mode)
+``Clip.frame()``   all nine (raw bytes in the clip's format)
+=================  ==================================================
+
+Either player raises ``RV565Error`` naming the formats it supports for any
+other clip.
+
+**Status: experimental.** It passes host tests against every RV565
+conformance vector (``tests/data/v7``) and, for version 6 clips, plays on a
+Raspberry Pi Pico 2 under CircuitPython 10.3.1 (measurements below). The
+version 7 paths (stored frames, deltas, repeats, ``rgb565le``, the grey and
+mono palettes, ``rgb666`` on ``DirectPlayer``) are tested on a computer only
+and have not yet run on a board.
 
 Measured on a Raspberry Pi Pico 2 (RP2350, CircuitPython 10.3.1), playing
 the 180x135, 24 FPS test pattern to a 320x240 ST7789 on SPI at 40 MHz
@@ -83,7 +104,13 @@ runs in your browser, or the Python tool::
 Because this library will not reach 24 FPS, a lower rate such as 8 or 12 FPS
 wastes less of the file on frames that will be skipped. Keep clips at 180x135
 or smaller on boards without PSRAM, such as the Pico 2: a 320x240 frame needs
-150 KiB inflated and as much again for the bitmap.
+150 KiB inflated and as much again for the bitmap (see `Memory`_).
+
+Choosing a format for this library: ``rgb565be`` with ``K`` = 1 is what has
+been measured on a board. A keyframe interval above 1 makes files smaller
+and adds a delta frame's XOR (see `Memory`_ and `Delta frames and speed`_),
+and repeats cost nothing to play. The stored codec skips inflating
+altogether, at the cost of reading a whole frame from flash or SD per frame.
 
 Usage
 -----
@@ -100,28 +127,97 @@ Usage
     stats = player.play()                   # paced to clip.fps, late frames skipped
     print(stats)  # <PlayStats x.xx of 24 FPS: n shown, m skipped ...>
 
-``rv565.open()`` reads only the 12-byte header. The frame index is built on
-first use with one pass over the length fields (4 bytes of RAM per frame),
-which also validates the whole container; call ``clip.build_index()`` to do
-that before playback. Frames are read from the file one at a time, so a clip
-on CIRCUITPY or an SD card does not have to fit in RAM. ``clip.frame(i)``
-returns frame ``i`` as big-endian RGB565 bytes and raises ``RV565Error`` if it
-does not inflate to exactly ``2 * width * height`` bytes.
+``rv565.open()`` reads and checks only the header (``clip.version``,
+``clip.pixel_format``, ``clip.codec``, ``clip.keyframe_interval`` and the
+size, rate and frame count). The frame index is built on first use with one
+pass over the record headers (5 bytes of RAM per frame), which also validates
+the rest of the container as the format requires: lengths, trailing bytes,
+frame types, a keyframe at every multiple of ``K``, empty repeats and
+exact-size stored frames. Call ``clip.build_index()`` to do that before
+playback. Frames are read from the file one at a time, so a clip on
+CIRCUITPY or an SD card does not have to fit in RAM.
+
+``clip.frame(i)`` returns frame ``i`` as bytes in the clip's pixel format
+(``clip.frame_bytes`` of them) and raises ``RV565Error`` if a zlib body does
+not inflate to exactly that many bytes. The result is the clip's own frame
+buffer, overwritten by the next call: copy it with ``bytes()`` to keep it.
+Decoding the next frame applies one record; a seek starts at the latest
+keyframe at or before ``i`` and applies at most ``K - 1`` records.
+``clip.frame_type(i)`` is ``"key"``, ``"delta"`` or ``"repeat"``.
+
+Memory
+------
+
+All figures for a 180x135 clip (``S`` = 48,600 bytes in RGB565):
+
+* **Index:** 4 bytes per frame for record offsets, plus 1 per frame for the
+  frame types in version 7.
+* **Frame buffer:** one ``bytearray`` of ``S`` bytes, allocated on the first
+  decode and reused for every frame.
+* **Keyframes and deltas, zlib:** ``zlib.decompress`` returns a new ``S``-byte
+  object each frame (CircuitPython's ``zlib`` cannot inflate into an
+  existing buffer), plus the compressed body read from the file. A keyframe
+  is copied into the frame buffer; a delta is XORed into it in place. Peak:
+  about ``2 S`` plus the body, the same for keyframes and deltas.
+* **Stored codec:** a keyframe read from a file goes straight into the frame
+  buffer with ``readinto``, with no other allocation; a stored delta needs
+  one more ``S``-byte scratch buffer, allocated once. Clips passed as
+  ``bytes`` need no scratch buffer.
+* **XOR:** works in 2 KiB chunks, so it allocates a few short-lived 2 KiB
+  objects per chunk rather than anything frame-sized.
+* **Player:** the ``displayio.Bitmap`` adds ``S`` for RGB565 (2 bytes per
+  pixel), ``w x h`` for ``gray8``, and less for ``gray4`` and ``mono``
+  (CircuitPython stores them at 4 and 1 bits per pixel). Some ports copy the
+  frame into the ``io.BytesIO`` that ``bitmaptools.readinto`` reads from,
+  which can add another ``S`` while drawing.
+* **DirectPlayer:** no bitmap; it sends the frame buffer itself.
+
+So ``Player`` with a 180x135 RGB565 zlib clip needs roughly 150 to 200 KiB
+of heap at its peak (frame buffer, inflate output, bitmap, and possibly the
+``BytesIO`` copy), and ``DirectPlayer`` roughly 100 KiB; a Pico 2 has room
+for either, smaller boards without PSRAM may not. Version 1 of this library
+needed one ``S`` less, since it kept no frame buffer between frames.
+
+Delta frames and speed
+----------------------
+
+A delta frame costs its inflate plus one XOR over the whole frame. On boards
+with long integers (all ESP32-S3 and RP2350 builds) the XOR runs in C:
+each 2 KiB chunk becomes two integers with ``int.from_bytes``, is XORed, and
+is written back with ``to_bytes``. Boards without long integers fall back to
+a Python loop over every byte, which is much slower. Neither has been timed
+on a board yet; expect the long-integer XOR to cost a few milliseconds per
+180x135 frame, small next to the inflate.
+
+When playback falls behind, frames are skipped, but a skipped delta still has
+to be applied to reach the next frame shown (at most ``K - 1`` of them, back
+to the last keyframe), so a long keyframe interval saves less time than it
+saves space on a slow board. Repeat frames are neither decoded nor drawn.
 
 How a frame reaches the display
 -------------------------------
 
-``Player`` inflates each frame into a ``displayio.Bitmap`` with 65536 values,
-drawn through ``ColorConverter(input_colorspace=Colorspace.RGB565_SWAPPED)``.
-The bitmap stores each value as a little-endian 16-bit word, so copying the
-file's big-endian bytes in unchanged gives byte-swapped values, which is
-exactly what ``RGB565_SWAPPED`` describes (the same convention ``gifio`` uses).
-The copy is one ``bitmaptools.readinto()`` call; boards without it fall back
-to a much slower per-pixel loop.
+``Player`` copies each decoded frame into a ``displayio.Bitmap`` with one
+``bitmaptools.readinto()`` call; boards without it fall back to a much slower
+per-pixel loop.
+
+* ``rgb565be``: a 65536-value bitmap drawn through
+  ``ColorConverter(input_colorspace=Colorspace.RGB565_SWAPPED)``. The bitmap
+  stores each value as a little-endian 16-bit word, so copying the file's
+  big-endian bytes in unchanged gives byte-swapped values, which is exactly
+  what ``RGB565_SWAPPED`` describes (the same convention ``gifio`` uses).
+* ``rgb565le``: the same bitmap through ``Colorspace.RGB565``.
+* ``gray8``, ``gray4``, ``mono``: a 256-, 16- or 2-value bitmap through a
+  grey ``displayio.Palette`` (``mono``: 0 black, 1 white), read with
+  ``bits_per_pixel`` 8, 4 or 1 and ``reverse_pixels_in_element=True`` so the
+  first pixel comes from the high bits, as the format stores it.
 
 ``DirectPlayer`` (experimental) skips ``displayio``: since RV565 bytes are
 already what an ST7789 expects, it sets the address window and sends each
-frame with one ``bus.send()``. It should be considerably faster, but it needs
+frame with one ``bus.send()``. ``rgb565be`` clips go to the panel as
+``adafruit_st7789`` set it up; for ``rgb666`` clips it also switches the
+controller to 18-bit pixels (COLMOD ``0x66``) while playing and back to
+``0x55`` afterwards (``restore_colmod=``; untested on a board). It should be considerably faster, but it needs
 the display to be initialised first (for example by ``adafruit_st7789``) and
 takes the panel over while playing. ``displayio`` rotation is done in
 software and never reaches the controller, so for a landscape panel
@@ -153,10 +249,14 @@ The tests run with CPython and stand-ins for ``displayio`` and
 
     python3 -m unittest discover -s ports/circuitpython/tests -v
 
-They check the reader against ``tests/data/testpattern.rv565`` (all 24 frames
-must equal CPython's zlib output), every validation rule of the format, that
-the bitmap shows the right colour for every pixel, frame pacing and skipping,
-and the bytes ``DirectPlayer`` sends.
+They check the reader against every conformance vector in
+``tests/data/v7`` (each frame's SHA-256 from ``manifest.json``, decoded in
+order and by random seeks, from bytes and from a file; every invalid file
+rejected when opened and indexed, or when decoded, as the manifest says) and
+against ``tests/data/testpattern.rv565``; that the bitmap shows the right
+colour for every pixel in each format ``Player`` supports (compared with the
+reference package's ``to_rgb888``); frame pacing, skipping and repeats; and
+the bytes ``DirectPlayer`` sends.
 
 Submitting to the Community Bundle
 ----------------------------------

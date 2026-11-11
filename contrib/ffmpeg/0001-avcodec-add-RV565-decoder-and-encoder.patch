@@ -1,0 +1,1066 @@
+From 139026bdbf7864d448a7d8f3258d6418e6115382 Mon Sep 17 00:00:00 2001
+From: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
+Date: Thu, 12 Nov 2026 00:30:49 +0530
+Subject: [PATCH 1/2] avcodec: add RV565 decoder and encoder
+
+RV565 stores video for microcontroller displays as frames already in the
+display's pixel format, so a player only decompresses and transfers.
+Version 7 of the format declares one of nine pixel formats (rgb565be,
+rgb565le, packed rgb444, rgb666, rgb888, gray8, gray4, mono and the
+page-ordered mono of SSD1306-class controllers), stores frames as they
+are or as zlib streams, and makes each frame a keyframe, the XOR of the
+frame with the previous one, or a repeat of it, with a keyframe at least
+every 1-255 frames.
+
+A packet is a frame record: a frame type byte and the body. Extradata
+carries the pixel format, codec and keyframe interval; without it the
+stream is version 6 (rgb565be, zlib, keyframes only). The decoder keeps
+the previous frame in the stored layout, since deltas apply to those
+bytes, and outputs rgb565be, rgb565le, rgb444be, rgb24, gray or monob,
+losslessly for every stored format. It rejects bodies that do not
+decode to exactly one frame, and deltas or repeats without a reference.
+
+The encoder stores the input pixel format as it is, or the format chosen
+with -format, and writes a repeat for an unchanged frame, otherwise the
+smaller of a keyframe and a delta, like the reference encoder; with the
+same zlib its output is byte-identical to the reference. -g sets the
+keyframe interval (default 1), -compressor stored|zlib the codec and
+-compression_level the zlib level (default 1, the level the format's
+cost model was measured at).
+
+On the RV565 paper's Big Buck Bunny windows, one keyframe per second
+gives 1.10-1.28 MiB for a 90-frame window against 6.12 MiB with only
+keyframes (MJPEG q2: 1.84 MiB, lossy), and 4.24-4.65 MiB against 8.54
+MiB for a 360-frame window (MJPEG q2: 2.58 MiB), all pixel-exact.
+
+Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
+Paper: https://arxiv.org/abs/2610.35935
+
+Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
+---
+ configure                 |   2 +
+ doc/APIchanges            |   3 +
+ doc/encoders.texi         |  56 ++++++
+ doc/general_contents.texi |   2 +
+ libavcodec/Makefile       |   2 +
+ libavcodec/allcodecs.c    |   2 +
+ libavcodec/codec_desc.c   |   7 +
+ libavcodec/codec_id.h     |   1 +
+ libavcodec/rv565.h        |  96 ++++++++++
+ libavcodec/rv565dec.c     | 322 +++++++++++++++++++++++++++++++
+ libavcodec/rv565enc.c     | 394 ++++++++++++++++++++++++++++++++++++++
+ libavcodec/version.h      |   2 +-
+ 12 files changed, 888 insertions(+), 1 deletion(-)
+ create mode 100644 libavcodec/rv565.h
+ create mode 100644 libavcodec/rv565dec.c
+ create mode 100644 libavcodec/rv565enc.c
+
+diff --git a/configure b/configure
+index c37cedbbe0..f65ac3b2a6 100755
+--- a/configure
++++ b/configure
+@@ -3268,6 +3268,8 @@ rv20_encoder_select="h263_encoder"
+ rv30_decoder_select="golomb h264pred h264qpel mpegvideodec rv34dsp"
+ rv40_decoder_select="golomb h264pred h264qpel mpegvideodec rv34dsp"
+ rv60_decoder_select="videodsp golomb"
++rv565_decoder_select="inflate_wrapper"
++rv565_encoder_select="deflate_wrapper"
+ screenpresso_decoder_deps="zlib"
+ shorten_decoder_select="bswapdsp"
+ sipr_decoder_select="lsp celp_math"
+diff --git a/doc/APIchanges b/doc/APIchanges
+index c729b61a44..fc857cc3f3 100644
+--- a/doc/APIchanges
++++ b/doc/APIchanges
+@@ -2,6 +2,9 @@ The last version increases of all libraries were on 2026-06-23.
+ 
+ API changes, most recent first:
+ 
++2026-11-xx - xxxxxxxxxx - lavc 63.29.100 - codec_id.h
++  Add AV_CODEC_ID_RV565.
++
+ 2026-11-xx - xxxxxxxxxx - lavc 63.28.100 - packet.h
+   Add AV_PKT_FLAG_EOS.
+ 
+diff --git a/doc/encoders.texi b/doc/encoders.texi
+index d3487b40a5..8a22b0a26a 100644
+--- a/doc/encoders.texi
++++ b/doc/encoders.texi
+@@ -5306,6 +5306,62 @@ Maximum encoded frame size for P frames in bytes. If this value is set as larger
+ than zero, then for P frames the value set by max_frame_size is ignored.
+ @end table
+ 
++@section rv565
++
++RV565 video encoder.
++
++RV565 stores frames in the pixel format of a microcontroller display. Every
++keyframe interval starts with a keyframe; any other frame is a repeat when it
++equals the previous frame, otherwise the smaller of a keyframe and a delta
++(the XOR of the frame with the previous one).
++
++@subsection Options
++
++@table @option
++@item format @var{integer}
++The pixel format of the frames, and the input pixel format it is encoded
++from.
++
++@table @samp
++@item auto
++Store the input pixel format as it is: @samp{rgb565be}, @samp{rgb565le},
++@samp{rgb444be}, @samp{rgb24}, @samp{gray} and @samp{monob} are stored as
++@samp{rgb565be}, @samp{rgb565le}, @samp{rgb444}, @samp{rgb888}, @samp{gray8}
++and @samp{mono}.
++@item rgb565be
++@item rgb565le
++@item rgb444
++Packed 12-bit RGB, from @samp{rgb444be}.
++@item rgb666
++RGB with 6 bits per channel in the high bits of each byte, from @samp{rgb24}.
++@item rgb888
++@item gray8
++@item gray4
++Two pixels per byte, from @samp{gray}.
++@item mono
++One bit per pixel in rows, from @samp{monob}.
++@item mono_vpage
++One bit per pixel in pages of 8 rows, as used by SSD1306-class controllers,
++from @samp{monob}.
++@end table
++
++Default value is @samp{auto}.
++
++@item compressor @var{integer}
++@table @samp
++@item stored
++@item zlib
++@end table
++
++Default value is @samp{zlib}.
++
++@item g @var{integer}
++The keyframe interval, 1 to 255. Default value is 1, every frame a keyframe.
++
++@item compression_level @var{integer}
++The zlib compression level, 0 to 9. Default value is 1.
++@end table
++
+ @section snow
+ 
+ @subsection Options
+diff --git a/doc/general_contents.texi b/doc/general_contents.texi
+index 0176cd0875..76427cf257 100644
+--- a/doc/general_contents.texi
++++ b/doc/general_contents.texi
+@@ -1236,6 +1236,8 @@ following image formats are supported:
+     @tab fourcc: 'RTV1'
+ @item RL2 video              @tab     @tab  X
+     @tab used in some games by Entertainment Software Partners
++@item RV565                  @tab  X  @tab  X
++    @tab Video for microcontroller displays: RGB, grayscale and monochrome frames, stored or zlib-compressed, with keyframes, XOR deltas and repeats
+ @item ScreenPressor          @tab     @tab  X
+ @item Screenpresso           @tab     @tab  X
+ @item Screen Recorder Gold Codec  @tab     @tab  X
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 4bffc08118..684fb597ab 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -698,6 +698,8 @@ OBJS-$(CONFIG_RV20_ENCODER)            += rv20enc.o
+ OBJS-$(CONFIG_RV30_DECODER)            += rv30.o rv34.o rv30dsp.o
+ OBJS-$(CONFIG_RV40_DECODER)            += rv40.o rv34.o rv40dsp.o
+ OBJS-$(CONFIG_RV60_DECODER)            += rv60dec.o rv60dsp.o
++OBJS-$(CONFIG_RV565_DECODER)           += rv565dec.o
++OBJS-$(CONFIG_RV565_ENCODER)           += rv565enc.o
+ OBJS-$(CONFIG_RW2_DECODER)             += rw2dec.o
+ OBJS-$(CONFIG_SAMI_DECODER)            += samidec.o ass.o htmlsubtitles.o
+ OBJS-$(CONFIG_S302M_DECODER)           += s302m.o
+diff --git a/libavcodec/allcodecs.c b/libavcodec/allcodecs.c
+index edbe44ecc6..92cc42432a 100644
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -305,6 +305,8 @@ extern const FFCodec ff_rv20_decoder;
+ extern const FFCodec ff_rv30_decoder;
+ extern const FFCodec ff_rv40_decoder;
+ extern const FFCodec ff_rv60_decoder;
++extern const FFCodec ff_rv565_encoder;
++extern const FFCodec ff_rv565_decoder;
+ extern const FFCodec ff_rw2_decoder;
+ extern const FFCodec ff_s302m_encoder;
+ extern const FFCodec ff_s302m_decoder;
+diff --git a/libavcodec/codec_desc.c b/libavcodec/codec_desc.c
+index dd63c2194d..12a47fdc8e 100644
+--- a/libavcodec/codec_desc.c
++++ b/libavcodec/codec_desc.c
+@@ -2017,6 +2017,13 @@ static const AVCodecDescriptor codec_descriptors[] = {
+         .long_name = NULL_IF_CONFIG_SMALL("Infinity IMM6"),
+         .props     = AV_CODEC_PROP_LOSSY | AV_CODEC_PROP_REORDER,
+     },
++    {
++        .id        = AV_CODEC_ID_RV565,
++        .type      = AVMEDIA_TYPE_VIDEO,
++        .name      = "rv565",
++        .long_name = NULL_IF_CONFIG_SMALL("RV565 (microcontroller display video)"),
++        .props     = AV_CODEC_PROP_LOSSLESS,
++    },
+ 
+     /* various PCM "codecs" */
+     {
+diff --git a/libavcodec/codec_id.h b/libavcodec/codec_id.h
+index 8c78bbce37..168a53ea3d 100644
+--- a/libavcodec/codec_id.h
++++ b/libavcodec/codec_id.h
+@@ -327,6 +327,7 @@ enum AVCodecID {
+     AV_CODEC_ID_ASTC,
+     AV_CODEC_ID_RW2,
+     AV_CODEC_ID_IMM6,
++    AV_CODEC_ID_RV565,
+ 
+     /* various PCM "codecs" */
+     AV_CODEC_ID_FIRST_AUDIO = 0x10000,     ///< A dummy id pointing at the start of audio codecs
+diff --git a/libavcodec/rv565.h b/libavcodec/rv565.h
+new file mode 100644
+index 0000000000..f346abca83
+--- /dev/null
++++ b/libavcodec/rv565.h
+@@ -0,0 +1,96 @@
++/*
++ * RV565 common definitions
++ *
++ * Copyright (c) 2026 Ayushman Bhattacharya
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * @file
++ * RV565 definitions shared by the codec and the container.
++ * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
++ *
++ * A packet is one frame record without its length field: a frame type byte
++ * (enum RV565FrameType) followed by the body. Extradata is
++ * RV565_EXTRADATA_SIZE bytes, the pixel format, the codec and the keyframe
++ * interval, as at offsets 13-15 of a version 7 file header. Without
++ * extradata, a stream is version 6: RGB565 big-endian, zlib, keyframes only.
++ */
++
++#ifndef AVCODEC_RV565_H
++#define AVCODEC_RV565_H
++
++#include <stdint.h>
++
++#define RV565_EXTRADATA_SIZE 3
++
++enum RV565PixelFormat {
++    RV565_PIX_RGB565BE,
++    RV565_PIX_RGB565LE,
++    RV565_PIX_RGB444,
++    RV565_PIX_RGB666,
++    RV565_PIX_RGB888,
++    RV565_PIX_GRAY8,
++    RV565_PIX_GRAY4,
++    RV565_PIX_MONO,
++    RV565_PIX_MONO_VPAGE,
++    RV565_PIX_NB,
++};
++
++enum RV565Codec {
++    RV565_CODEC_STORED,
++    RV565_CODEC_ZLIB,
++    RV565_CODEC_NB,
++};
++
++enum RV565FrameType {
++    RV565_FRAME_KEY,
++    RV565_FRAME_DELTA,
++    RV565_FRAME_REPEAT,
++    RV565_FRAME_NB,
++};
++
++/**
++ * Bytes in one row of a frame; not defined for RV565_PIX_MONO_VPAGE.
++ */
++static inline int64_t ff_rv565_row_size(enum RV565PixelFormat fmt, int width)
++{
++    switch (fmt) {
++    case RV565_PIX_RGB565BE:
++    case RV565_PIX_RGB565LE: return 2LL * width;
++    case RV565_PIX_RGB444:   return (3LL * width + 1) >> 1;
++    case RV565_PIX_RGB666:
++    case RV565_PIX_RGB888:   return 3LL * width;
++    case RV565_PIX_GRAY8:    return width;
++    case RV565_PIX_GRAY4:    return (width + 1LL) >> 1;
++    case RV565_PIX_MONO:     return (width + 7LL) >> 3;
++    default:                 return 0;
++    }
++}
++
++/**
++ * Size in bytes of one decoded frame.
++ */
++static inline int64_t ff_rv565_frame_size(enum RV565PixelFormat fmt, int width, int height)
++{
++    if (fmt == RV565_PIX_MONO_VPAGE)
++        return (int64_t)width * ((height + 7LL) >> 3);
++    return ff_rv565_row_size(fmt, width) * height;
++}
++
++#endif /* AVCODEC_RV565_H */
+diff --git a/libavcodec/rv565dec.c b/libavcodec/rv565dec.c
+new file mode 100644
+index 0000000000..a6b6835fee
+--- /dev/null
++++ b/libavcodec/rv565dec.c
+@@ -0,0 +1,322 @@
++/*
++ * RV565 video decoder
++ *
++ * Copyright (c) 2026 Ayushman Bhattacharya
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * @file
++ * RV565 video decoder.
++ *
++ * Frames are stored in the pixel format of a microcontroller display, either
++ * as they are or as zlib streams. A keyframe holds the frame, a delta holds
++ * the XOR of the frame with the previous one, and a repeat holds nothing.
++ * Deltas apply to the frame bytes in the stored layout, so the decoder keeps
++ * the previous frame in that layout and converts it to the output pixel
++ * format afterwards.
++ * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
++ */
++
++#include "libavutil/imgutils.h"
++#include "libavutil/mem.h"
++#include "avcodec.h"
++#include "codec_internal.h"
++#include "decode.h"
++#include "rv565.h"
++#include "zlib_wrapper.h"
++
++#include <zlib.h>
++
++typedef struct RV565DecContext {
++    FFZStream zstream;
++    enum RV565PixelFormat format;
++    enum RV565Codec codec;
++    size_t frame_size;
++    uint8_t *frame;      ///< the current frame in the stored layout
++    uint8_t *body;       ///< an inflated body
++    /* Both buffers hold frame_size + 1 bytes, see inflate_body(). */
++    int have_reference;
++} RV565DecContext;
++
++static const enum AVPixelFormat output_formats[RV565_PIX_NB] = {
++    [RV565_PIX_RGB565BE]   = AV_PIX_FMT_RGB565BE,
++    [RV565_PIX_RGB565LE]   = AV_PIX_FMT_RGB565LE,
++    [RV565_PIX_RGB444]     = AV_PIX_FMT_RGB444BE,
++    [RV565_PIX_RGB666]     = AV_PIX_FMT_RGB24,
++    [RV565_PIX_RGB888]     = AV_PIX_FMT_RGB24,
++    [RV565_PIX_GRAY8]      = AV_PIX_FMT_GRAY8,
++    [RV565_PIX_GRAY4]      = AV_PIX_FMT_GRAY8,
++    [RV565_PIX_MONO]       = AV_PIX_FMT_MONOBLACK,
++    [RV565_PIX_MONO_VPAGE] = AV_PIX_FMT_MONOBLACK,
++};
++
++static av_cold int decode_init(AVCodecContext *avctx)
++{
++    RV565DecContext *s = avctx->priv_data;
++    int64_t frame_size;
++    int ret;
++
++    if (avctx->extradata_size >= RV565_EXTRADATA_SIZE) {
++        s->format = avctx->extradata[0];
++        s->codec  = avctx->extradata[1];
++    } else if (!avctx->extradata_size) {
++        s->format = RV565_PIX_RGB565BE;
++        s->codec  = RV565_CODEC_ZLIB;
++    } else {
++        av_log(avctx, AV_LOG_ERROR, "Invalid extradata size %d.\n",
++               avctx->extradata_size);
++        return AVERROR_INVALIDDATA;
++    }
++    if (s->format >= RV565_PIX_NB) {
++        av_log(avctx, AV_LOG_ERROR, "Unknown pixel format %d.\n", s->format);
++        return AVERROR_INVALIDDATA;
++    }
++    if (s->codec >= RV565_CODEC_NB) {
++        av_log(avctx, AV_LOG_ERROR, "Unknown codec %d.\n", s->codec);
++        return AVERROR_INVALIDDATA;
++    }
++
++    ret = av_image_check_size(avctx->width, avctx->height, 0, avctx);
++    if (ret < 0)
++        return ret;
++
++    avctx->pix_fmt = output_formats[s->format];
++
++    frame_size    = ff_rv565_frame_size(s->format, avctx->width, avctx->height);
++    s->frame_size = frame_size;
++    s->frame      = av_malloc(frame_size + 1);
++    s->body       = av_malloc(frame_size + 1);
++    if (!s->frame || !s->body)
++        return AVERROR(ENOMEM);
++
++    if (s->codec == RV565_CODEC_ZLIB)
++        return ff_inflate_init(&s->zstream, avctx);
++
++    return 0;
++}
++
++static av_cold int decode_end(AVCodecContext *avctx)
++{
++    RV565DecContext *s = avctx->priv_data;
++
++    av_freep(&s->frame);
++    av_freep(&s->body);
++    ff_inflate_end(&s->zstream);
++
++    return 0;
++}
++
++static av_cold void decode_flush(AVCodecContext *avctx)
++{
++    RV565DecContext *s = avctx->priv_data;
++
++    s->have_reference = 0;
++}
++
++/**
++ * Inflate a zlib body to exactly frame_size bytes. The output buffer has one
++ * byte more than that, so a stream that is too long is detected.
++ */
++static int inflate_body(AVCodecContext *avctx, const uint8_t *src, int size,
++                        uint8_t *dst)
++{
++    RV565DecContext *s = avctx->priv_data;
++    z_stream *const zstream = &s->zstream.zstream;
++    int zret;
++
++    if (size * 1032LL < s->frame_size) // Asymptotic max compression of deflate
++        return AVERROR_INVALIDDATA;
++
++    zret = inflateReset(zstream);
++    if (zret != Z_OK) {
++        av_log(avctx, AV_LOG_ERROR, "Could not reset inflate: %d.\n", zret);
++        return AVERROR_EXTERNAL;
++    }
++
++    zstream->next_in   = src;
++    zstream->avail_in  = size;
++    zstream->next_out  = dst;
++    zstream->avail_out = s->frame_size + 1;
++
++    zret = inflate(zstream, Z_FINISH);
++    if (zret != Z_STREAM_END) {
++        av_log(avctx, AV_LOG_ERROR, "Inflate failed with return code: %d.\n", zret);
++        return AVERROR_INVALIDDATA;
++    }
++    if (zstream->total_out != s->frame_size) {
++        av_log(avctx, AV_LOG_ERROR, "Frame inflates to %lu bytes instead of %zu.\n",
++               zstream->total_out, s->frame_size);
++        return AVERROR_INVALIDDATA;
++    }
++
++    return 0;
++}
++
++static void unpack_rgb444(uint8_t *dst, const uint8_t *src, int width)
++{
++    for (int x = 0; x < width; x += 2, src += 3, dst += 4) {
++        dst[0] = src[0] >> 4;
++        dst[1] = (src[0] << 4) | (src[1] >> 4);
++        if (x + 1 < width) {
++            dst[2] = src[1] & 0x0f;
++            dst[3] = src[2];
++        }
++    }
++}
++
++static void unpack_gray4(uint8_t *dst, const uint8_t *src, int width)
++{
++    for (int x = 0; x < width; x++)
++        dst[x] = (src[x >> 1] >> (x & 1 ? 0 : 4) & 0x0f) * 0x11;
++}
++
++static void convert_frame(AVCodecContext *avctx, AVFrame *frame)
++{
++    RV565DecContext *s = avctx->priv_data;
++    const int width = avctx->width, height = avctx->height;
++    const uint8_t *src = s->frame;
++    uint8_t *dst = frame->data[0];
++
++    switch (s->format) {
++    case RV565_PIX_RGB444:
++    case RV565_PIX_GRAY4: {
++        const int row_size = ff_rv565_row_size(s->format, width);
++
++        for (int y = 0; y < height; y++) {
++            if (s->format == RV565_PIX_RGB444)
++                unpack_rgb444(dst, src, width);
++            else
++                unpack_gray4(dst, src, width);
++            src += row_size;
++            dst += frame->linesize[0];
++        }
++        break;
++    }
++    case RV565_PIX_MONO_VPAGE:
++        /* Pages of 8 rows, one byte per column, least significant bit on
++         * top: transpose each page into MSB-first rows. */
++        for (int y = 0; y < height; y++) {
++            const uint8_t *page = src + (y >> 3) * (size_t)width;
++            const int bit = y & 7;
++
++            memset(dst, 0, (width + 7) >> 3);
++            for (int x = 0; x < width; x++)
++                dst[x >> 3] |= (page[x] >> bit & 1) << (7 - (x & 7));
++            dst += frame->linesize[0];
++        }
++        break;
++    default:
++        av_image_copy_plane(dst, frame->linesize[0], src,
++                            ff_rv565_row_size(s->format, width),
++                            ff_rv565_row_size(s->format, width), height);
++        break;
++    }
++}
++
++static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
++                        int *got_frame, AVPacket *avpkt)
++{
++    RV565DecContext *s = avctx->priv_data;
++    const uint8_t *body = avpkt->data + 1;
++    const int body_size = avpkt->size - 1;
++    int type, ret;
++
++    if (avpkt->size < 1)
++        return AVERROR_INVALIDDATA;
++    type = avpkt->data[0];
++
++    switch (type) {
++    case RV565_FRAME_KEY:
++    case RV565_FRAME_DELTA: {
++        const uint8_t *src = body;
++
++        if (type == RV565_FRAME_DELTA && !s->have_reference) {
++            av_log(avctx, AV_LOG_ERROR, "Delta frame without a reference frame.\n");
++            return AVERROR_INVALIDDATA;
++        }
++        /* Whatever follows depends on this frame. */
++        s->have_reference = 0;
++
++        if (s->codec == RV565_CODEC_ZLIB) {
++            ret = inflate_body(avctx, body, body_size, s->body);
++            if (ret < 0)
++                return ret;
++            src = s->body;
++        } else if (body_size != s->frame_size) {
++            av_log(avctx, AV_LOG_ERROR, "Stored frame has %d bytes instead of %zu.\n",
++                   body_size, s->frame_size);
++            return AVERROR_INVALIDDATA;
++        }
++
++        if (type == RV565_FRAME_KEY) {
++            if (src == s->body)
++                FFSWAP(uint8_t *, s->frame, s->body);
++            else
++                memcpy(s->frame, src, s->frame_size);
++        } else {
++            for (size_t i = 0; i < s->frame_size; i++)
++                s->frame[i] ^= src[i];
++        }
++        s->have_reference = 1;
++        break;
++    }
++    case RV565_FRAME_REPEAT:
++        if (body_size) {
++            av_log(avctx, AV_LOG_ERROR, "Repeat frame has a body.\n");
++            return AVERROR_INVALIDDATA;
++        }
++        if (!s->have_reference) {
++            av_log(avctx, AV_LOG_ERROR, "Repeat frame without a reference frame.\n");
++            return AVERROR_INVALIDDATA;
++        }
++        break;
++    default:
++        av_log(avctx, AV_LOG_ERROR, "Unknown frame type %d.\n", type);
++        return AVERROR_INVALIDDATA;
++    }
++
++    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
++        return ret;
++
++    convert_frame(avctx, frame);
++
++    if (type == RV565_FRAME_KEY) {
++        frame->flags    |= AV_FRAME_FLAG_KEY;
++        frame->pict_type = AV_PICTURE_TYPE_I;
++    } else {
++        frame->pict_type = AV_PICTURE_TYPE_P;
++    }
++    *got_frame = 1;
++
++    return avpkt->size;
++}
++
++const FFCodec ff_rv565_decoder = {
++    .p.name         = "rv565",
++    CODEC_LONG_NAME("RV565 (microcontroller display video)"),
++    .priv_data_size = sizeof(RV565DecContext),
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_RV565,
++    .p.capabilities = AV_CODEC_CAP_DR1,
++    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
++    .init           = decode_init,
++    .close          = decode_end,
++    .flush          = decode_flush,
++    FF_CODEC_DECODE_CB(decode_frame),
++};
+diff --git a/libavcodec/rv565enc.c b/libavcodec/rv565enc.c
+new file mode 100644
+index 0000000000..90c9aa01ae
+--- /dev/null
++++ b/libavcodec/rv565enc.c
+@@ -0,0 +1,394 @@
++/*
++ * RV565 video encoder
++ *
++ * Copyright (c) 2026 Ayushman Bhattacharya
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * @file
++ * RV565 video encoder.
++ *
++ * Every keyframe interval starts with a keyframe. Any other frame is a repeat
++ * when it equals the previous frame, otherwise the smaller of a keyframe and
++ * a delta (the XOR with the previous frame), as in the reference encoder.
++ * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
++ */
++
++#include "libavutil/common.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/mem.h"
++#include "libavutil/opt.h"
++#include "avcodec.h"
++#include "codec_internal.h"
++#include "encode.h"
++#include "rv565.h"
++#include "zlib_wrapper.h"
++
++#include <zlib.h>
++
++#define RV565_MAX_KEYFRAME_INTERVAL 255
++
++typedef struct RV565EncContext {
++    const AVClass *class;
++    FFZStream zstream;
++    int format;             ///< enum RV565PixelFormat, or -1 for auto
++    int codec;              ///< enum RV565Codec
++    int keyframe_interval;
++    size_t frame_size;
++    size_t bound;           ///< worst-case size of an encoded body
++    uint8_t *frame;         ///< the current frame in the stored layout
++    uint8_t *previous;      ///< the previous frame in the stored layout
++    uint8_t *delta;         ///< frame XOR previous
++    uint8_t *key_body, *delta_body;
++    int64_t frame_number;
++} RV565EncContext;
++
++/* The input pixel format each RV565 pixel format is encoded from, as a list
++ * for get_supported_config(). */
++static const enum AVPixelFormat input_formats[RV565_PIX_NB][2] = {
++    [RV565_PIX_RGB565BE]   = { AV_PIX_FMT_RGB565BE, AV_PIX_FMT_NONE },
++    [RV565_PIX_RGB565LE]   = { AV_PIX_FMT_RGB565LE, AV_PIX_FMT_NONE },
++    [RV565_PIX_RGB444]     = { AV_PIX_FMT_RGB444BE, AV_PIX_FMT_NONE },
++    [RV565_PIX_RGB666]     = { AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE },
++    [RV565_PIX_RGB888]     = { AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE },
++    [RV565_PIX_GRAY8]      = { AV_PIX_FMT_GRAY8, AV_PIX_FMT_NONE },
++    [RV565_PIX_GRAY4]      = { AV_PIX_FMT_GRAY8, AV_PIX_FMT_NONE },
++    [RV565_PIX_MONO]       = { AV_PIX_FMT_MONOBLACK, AV_PIX_FMT_NONE },
++    [RV565_PIX_MONO_VPAGE] = { AV_PIX_FMT_MONOBLACK, AV_PIX_FMT_NONE },
++};
++
++static av_cold int encode_init(AVCodecContext *avctx)
++{
++    RV565EncContext *s = avctx->priv_data;
++    int64_t frame_size;
++    int ret;
++
++    ret = av_image_check_size(avctx->width, avctx->height, 0, avctx);
++    if (ret < 0)
++        return ret;
++    if (avctx->width > UINT16_MAX || avctx->height > UINT16_MAX) {
++        av_log(avctx, AV_LOG_ERROR, "RV565 frames are limited to %ux%u.\n",
++               UINT16_MAX, UINT16_MAX);
++        return AVERROR(EINVAL);
++    }
++
++    if (s->format < 0) {
++        /* The formats that store the input as it is. */
++        switch (avctx->pix_fmt) {
++        case AV_PIX_FMT_RGB565BE:  s->format = RV565_PIX_RGB565BE; break;
++        case AV_PIX_FMT_RGB565LE:  s->format = RV565_PIX_RGB565LE; break;
++        case AV_PIX_FMT_RGB444BE:  s->format = RV565_PIX_RGB444;   break;
++        case AV_PIX_FMT_RGB24:     s->format = RV565_PIX_RGB888;   break;
++        case AV_PIX_FMT_GRAY8:     s->format = RV565_PIX_GRAY8;    break;
++        case AV_PIX_FMT_MONOBLACK: s->format = RV565_PIX_MONO;     break;
++        default:
++            return AVERROR_BUG;
++        }
++    } else if (input_formats[s->format][0] != avctx->pix_fmt) {
++        av_log(avctx, AV_LOG_ERROR, "The selected format needs %s input.\n",
++               av_get_pix_fmt_name(input_formats[s->format][0]));
++        return AVERROR(EINVAL);
++    }
++
++    if (avctx->gop_size < 1 || avctx->gop_size > RV565_MAX_KEYFRAME_INTERVAL) {
++        av_log(avctx, AV_LOG_ERROR, "The keyframe interval (-g) must be 1-%d.\n",
++               RV565_MAX_KEYFRAME_INTERVAL);
++        return AVERROR(EINVAL);
++    }
++    s->keyframe_interval = avctx->gop_size;
++
++    avctx->extradata = av_mallocz(RV565_EXTRADATA_SIZE + AV_INPUT_BUFFER_PADDING_SIZE);
++    if (!avctx->extradata)
++        return AVERROR(ENOMEM);
++    avctx->extradata_size = RV565_EXTRADATA_SIZE;
++    avctx->extradata[0]   = s->format;
++    avctx->extradata[1]   = s->codec;
++    avctx->extradata[2]   = s->keyframe_interval;
++
++    frame_size    = ff_rv565_frame_size(s->format, avctx->width, avctx->height);
++    s->frame_size = frame_size;
++    s->frame      = av_malloc(frame_size);
++    s->previous   = av_malloc(frame_size);
++    s->delta      = av_malloc(frame_size);
++    if (!s->frame || !s->previous || !s->delta)
++        return AVERROR(ENOMEM);
++
++    if (s->codec == RV565_CODEC_ZLIB) {
++        ret = ff_deflate_init(&s->zstream,
++                              avctx->compression_level == FF_COMPRESSION_DEFAULT ?
++                              1 : av_clip(avctx->compression_level, 0, 9),
++                              avctx);
++        if (ret < 0)
++            return ret;
++        s->bound      = deflateBound(&s->zstream.zstream, s->frame_size);
++        s->key_body   = av_malloc(s->bound);
++        s->delta_body = av_malloc(s->bound);
++        if (!s->key_body || !s->delta_body)
++            return AVERROR(ENOMEM);
++    }
++
++    return 0;
++}
++
++static av_cold int encode_end(AVCodecContext *avctx)
++{
++    RV565EncContext *s = avctx->priv_data;
++
++    av_freep(&s->frame);
++    av_freep(&s->previous);
++    av_freep(&s->delta);
++    av_freep(&s->key_body);
++    av_freep(&s->delta_body);
++    ff_deflate_end(&s->zstream);
++
++    return 0;
++}
++
++/* Convert the input frame to the stored layout; unused bits are zero. */
++static void convert_frame(AVCodecContext *avctx, const AVFrame *pict)
++{
++    RV565EncContext *s = avctx->priv_data;
++    const int width = avctx->width, height = avctx->height;
++    const uint8_t *src = pict->data[0];
++    uint8_t *dst = s->frame;
++
++    if (s->format == RV565_PIX_MONO_VPAGE) {
++        /* Rows of MSB-first bits to pages of 8 rows, one byte per column,
++         * least significant bit on top. */
++        memset(dst, 0, s->frame_size);
++        for (int y = 0; y < height; y++) {
++            uint8_t *page = dst + (y >> 3) * (size_t)width;
++
++            for (int x = 0; x < width; x++)
++                page[x] |= (src[x >> 3] >> (7 - (x & 7)) & 1) << (y & 7);
++            src += pict->linesize[0];
++        }
++        return;
++    }
++
++    for (int y = 0; y < height; y++) {
++        const int row_size = ff_rv565_row_size(s->format, width);
++
++        switch (s->format) {
++        case RV565_PIX_RGB444:
++            /* 0x0R 0xGB pairs to R0G0 B0R1 G1B1. */
++            for (int x = 0; x < width; x += 2) {
++                const uint8_t *p = src + 2 * x;
++                uint8_t *q = dst + 3 * (x >> 1);
++
++                q[0] = p[0] << 4 | p[1] >> 4;
++                if (x + 1 < width) {
++                    q[1] = p[1] << 4 | (p[2] & 0x0f);
++                    q[2] = p[3];
++                } else {
++                    q[1] = p[1] << 4;
++                }
++            }
++            break;
++        case RV565_PIX_RGB666:
++            for (int i = 0; i < row_size; i++)
++                dst[i] = src[i] & 0xfc;
++            break;
++        case RV565_PIX_GRAY4:
++            memset(dst, 0, row_size);
++            for (int x = 0; x < width; x++)
++                dst[x >> 1] |= (src[x] >> 4) << (x & 1 ? 0 : 4);
++            break;
++        default:
++            memcpy(dst, src, row_size);
++            if (s->format == RV565_PIX_MONO && width & 7)
++                dst[row_size - 1] &= 0xff << (8 - (width & 7));
++            break;
++        }
++        src += pict->linesize[0];
++        dst += row_size;
++    }
++}
++
++static int deflate_body(AVCodecContext *avctx, const uint8_t *src,
++                        uint8_t *dst, size_t *size)
++{
++    RV565EncContext *s = avctx->priv_data;
++    z_stream *const zstream = &s->zstream.zstream;
++    int zret;
++
++    zret = deflateReset(zstream);
++    if (zret != Z_OK) {
++        av_log(avctx, AV_LOG_ERROR, "Could not reset deflate: %d.\n", zret);
++        return AVERROR_EXTERNAL;
++    }
++
++    zstream->next_in   = src;
++    zstream->avail_in  = s->frame_size;
++    zstream->next_out  = dst;
++    zstream->avail_out = s->bound;
++
++    zret = deflate(zstream, Z_FINISH);
++    if (zret != Z_STREAM_END) {
++        av_log(avctx, AV_LOG_ERROR, "Deflate failed with return code: %d.\n", zret);
++        return AVERROR_EXTERNAL;
++    }
++    *size = zstream->total_out;
++
++    return 0;
++}
++
++static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
++                        const AVFrame *pict, int *got_packet)
++{
++    RV565EncContext *s = avctx->priv_data;
++    enum RV565FrameType type = RV565_FRAME_KEY;
++    const uint8_t *body;
++    size_t body_size;
++    int ret;
++
++    convert_frame(avctx, pict);
++
++    if (s->frame_number % s->keyframe_interval &&
++        !memcmp(s->frame, s->previous, s->frame_size))
++        type = RV565_FRAME_REPEAT;
++
++    if (type == RV565_FRAME_REPEAT) {
++        body      = NULL;
++        body_size = 0;
++    } else if (s->codec == RV565_CODEC_STORED) {
++        /* A stored delta is never smaller than the frame. */
++        body      = s->frame;
++        body_size = s->frame_size;
++    } else {
++        ret = deflate_body(avctx, s->frame, s->key_body, &body_size);
++        if (ret < 0)
++            return ret;
++        body = s->key_body;
++
++        if (s->frame_number % s->keyframe_interval) {
++            size_t delta_size;
++
++            for (size_t i = 0; i < s->frame_size; i++)
++                s->delta[i] = s->frame[i] ^ s->previous[i];
++            ret = deflate_body(avctx, s->delta, s->delta_body, &delta_size);
++            if (ret < 0)
++                return ret;
++            if (delta_size < body_size) {
++                type      = RV565_FRAME_DELTA;
++                body      = s->delta_body;
++                body_size = delta_size;
++            }
++        }
++    }
++
++    if (body_size > INT_MAX - 1)
++        return AVERROR(ERANGE);
++    ret = ff_get_encode_buffer(avctx, pkt, body_size + 1, 0);
++    if (ret < 0)
++        return ret;
++    pkt->data[0] = type;
++    if (body_size)
++        memcpy(pkt->data + 1, body, body_size);
++    if (type == RV565_FRAME_KEY)
++        pkt->flags |= AV_PKT_FLAG_KEY;
++
++    FFSWAP(uint8_t *, s->frame, s->previous);
++    s->frame_number++;
++    *got_packet = 1;
++
++    return 0;
++}
++
++#define OFFSET(x) offsetof(RV565EncContext, x)
++#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
++static const AVOption options[] = {
++    { "format", "RV565 pixel format", OFFSET(format), AV_OPT_TYPE_INT,
++      { .i64 = -1 }, -1, RV565_PIX_NB - 1, VE, .unit = "format" },
++        { "auto",       "the input pixel format, stored as it is", 0, AV_OPT_TYPE_CONST,
++          { .i64 = -1 },                   0, 0, VE, .unit = "format" },
++        { "rgb565be",   "RGB565 big-endian, from rgb565be",        0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_RGB565BE },   0, 0, VE, .unit = "format" },
++        { "rgb565le",   "RGB565 little-endian, from rgb565le",     0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_RGB565LE },   0, 0, VE, .unit = "format" },
++        { "rgb444",     "packed 12-bit RGB, from rgb444be",        0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_RGB444 },     0, 0, VE, .unit = "format" },
++        { "rgb666",     "RGB, 6 bits per channel, from rgb24",     0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_RGB666 },     0, 0, VE, .unit = "format" },
++        { "rgb888",     "RGB, 8 bits per channel, from rgb24",     0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_RGB888 },     0, 0, VE, .unit = "format" },
++        { "gray8",      "8-bit grayscale, from gray",              0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_GRAY8 },      0, 0, VE, .unit = "format" },
++        { "gray4",      "4-bit grayscale, from gray",              0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_GRAY4 },      0, 0, VE, .unit = "format" },
++        { "mono",       "1 bit per pixel in rows, from monob",     0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_MONO },       0, 0, VE, .unit = "format" },
++        { "mono_vpage", "1 bit per pixel in pages, from monob",    0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_PIX_MONO_VPAGE }, 0, 0, VE, .unit = "format" },
++    { "compressor", "frame compression", OFFSET(codec), AV_OPT_TYPE_INT,
++      { .i64 = RV565_CODEC_ZLIB }, 0, RV565_CODEC_NB - 1, VE, .unit = "compressor" },
++        { "stored", "none",         0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_CODEC_STORED }, 0, 0, VE, .unit = "compressor" },
++        { "zlib",   "zlib streams", 0, AV_OPT_TYPE_CONST,
++          { .i64 = RV565_CODEC_ZLIB },   0, 0, VE, .unit = "compressor" },
++    { NULL },
++};
++
++static const AVClass rv565enc_class = {
++    .class_name = "rv565 encoder",
++    .item_name  = av_default_item_name,
++    .option     = options,
++    .version    = LIBAVUTIL_VERSION_INT,
++};
++
++/* With a format selected, accept only the input it is encoded from. */
++static int get_supported_config(const AVCodecContext *avctx, const AVCodec *codec,
++                                enum AVCodecConfig config, unsigned flags,
++                                const void **out, int *out_num)
++{
++    if (config == AV_CODEC_CONFIG_PIX_FORMAT && avctx) {
++        const RV565EncContext *s = avctx->priv_data;
++
++        if (s && s->format >= 0) {
++            *out     = input_formats[s->format];
++            *out_num = 1;
++            return 0;
++        }
++    }
++
++    return ff_default_get_supported_config(avctx, codec, config, flags, out, out_num);
++}
++
++static const FFCodecDefault rv565_defaults[] = {
++    { "g", "1" },
++    { NULL },
++};
++
++const FFCodec ff_rv565_encoder = {
++    .p.name         = "rv565",
++    CODEC_LONG_NAME("RV565 (microcontroller display video)"),
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_RV565,
++    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
++    .priv_data_size = sizeof(RV565EncContext),
++    .p.priv_class   = &rv565enc_class,
++    .defaults       = rv565_defaults,
++    .init           = encode_init,
++    FF_CODEC_ENCODE_CB(encode_frame),
++    .close          = encode_end,
++    CODEC_PIXFMTS(AV_PIX_FMT_RGB565BE, AV_PIX_FMT_RGB565LE, AV_PIX_FMT_RGB444BE,
++                  AV_PIX_FMT_RGB24, AV_PIX_FMT_GRAY8, AV_PIX_FMT_MONOBLACK),
++    .get_supported_config = get_supported_config,
++    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
++};
+diff --git a/libavcodec/version.h b/libavcodec/version.h
+index 87b7284a95..5183deb68b 100644
+--- a/libavcodec/version.h
++++ b/libavcodec/version.h
+@@ -29,7 +29,7 @@
+ 
+ #include "version_major.h"
+ 
+-#define LIBAVCODEC_VERSION_MINOR  28
++#define LIBAVCODEC_VERSION_MINOR  29
+ #define LIBAVCODEC_VERSION_MICRO 100
+ 
+ #define LIBAVCODEC_VERSION_INT  AV_VERSION_INT(LIBAVCODEC_VERSION_MAJOR, \
+-- 
+2.53.0
+

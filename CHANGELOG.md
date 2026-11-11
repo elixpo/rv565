@@ -5,6 +5,109 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+Version 2.0.0 introduces RV565 format version 7 (`docs/FORMAT.md`): the
+header declares one of nine pixel formats (`rgb565be`, `rgb565le`, `rgb444`,
+`rgb666`, `rgb888`, `gray8`, `gray4`, `mono`, `mono_vpage`) and a codec
+(stored or zlib), frames are keyframes, exact XOR deltas or repeats, and a
+keyframe interval keeps seeking bounded. Version 6 files stay readable
+everywhere.
+
+- Conformance vectors in `tests/data/v7` (27 valid files with each decoded
+  frame's SHA-256, 20 invalid files with the stage that must reject them),
+  written and checked by `tools/make_conformance.py`. Every implementation
+  is tested against them in CI.
+- Python package 2.0.0, the reference implementation: `rv565.write()` takes
+  `pixel_format`, `codec`, `keyframe_interval` and `version=6`;
+  `rv565.convert()` and `rv565.to_rgb888()` handle every pixel format;
+  `Clip.frame_type()`, and `Header` gains `version`, `header_size`,
+  `pixel_format`, `codec` and `keyframe_interval`. `rv565 encode` and
+  `testpattern` take `--format`, `--codec`, `--keyframe-interval` and `--v6`;
+  `encode` now writes version 7 with one keyframe per second by default.
+  `rv565 info` reports the format, codec and frame types. The Pillow plugin
+  opens every pixel format and saves with the same options.
+- `docs/RESULTS_V7.md`: on the paper's film windows, version 7 with one
+  keyframe per second is 4.8–5.5× (W90) and 1.8–2.0× (W360) smaller than
+  version 6. File sizes only; playback on hardware is not measured yet.
+
+Version 2.0.0 of the C library reads RV565 format version 7
+(`docs/FORMAT.md`) and keeps reading version 6.
+
+- Format version 7 in the core (`rv565.h`): nine pixel formats
+  (`rv565_pixel_format_t`, `RV565_PIXEL_RGB565BE` … `RV565_PIXEL_MONO_VPAGE`),
+  codecs stored and zlib (`rv565_codec_t`), keyframe, delta and repeat
+  frames (`rv565_frame_type_t`) and the keyframe interval. Still
+  allocation-free; the zlib path still uses the ESP32 ROM tinfl or the
+  bundled one.
+- `rv565_open()` validates everything the spec checks at open time in its one
+  linear scan: reserved pixel format, codec or frame type, `K` = 0, a missing
+  keyframe at a multiple of `K`, a repeat with a body, a stored body that is
+  not `S` bytes, truncation and trailing bytes. Rates up to 60 FPS in
+  version 7 (30 in version 6).
+- New: `rv565_decode(clip, i, prev, dst, dst_len, scratch, scratch_len)`
+  (keyframe, delta against `prev`, repeat; in place with a scratch buffer
+  for zlib deltas, or between two buffers without one), `rv565_seek()`
+  (from the keyframe at or before a frame), `rv565_frame_type()`,
+  `rv565_keyframe_at_or_before()`, `rv565_row_bytes()`,
+  `rv565_bytes_per_pixel()`, and `rv565_scale_stripe_bpp()` for 1-, 2- and
+  3-byte pixels (packed formats are not scaled).
+- Player: deltas decode into the frame buffer that is not on screen, using
+  the presented frame as their base; repeats decode nothing and are not sent
+  to the display again; after a pacer skip the player applies the skipped
+  records the delta chain needs (at most `K` − 1) without showing them.
+  `rv565_frame_stats_t` gains `decoded` and `sent`. Only RGB565 big-endian
+  clips play (the bundled ST7789 drivers run the panel in RGB565); other
+  formats return `RV565_ERR_UNSUPPORTED` from `rv565_player_init()`.
+- `rv565_check_schedule()` models repeats as costing no decode, and applies
+  the cost model to the body length (type byte excluded).
+- MicroPython module (`ports/micropython`): `inflate_delta(body, prev, frame[,
+  scratch])`, `xor_frame(frame, other)` and `FORMAT_VERSION`;
+  `inflate_frame()` is unchanged.
+- Tests: `tests/test_conformance.c` and `tests/check_conformance.py` decode
+  every vector in `tests/data/v7` in order (in place and between two
+  buffers) and by seeking, compare each frame's SHA-256 with the manifest,
+  and check that every invalid file is rejected at the right stage with the
+  matching status. `make -C tests` runs them, and the player test now plays
+  the rgb565be vectors. CI also runs the tests under ASan/UBSan and checks
+  the vectors with `tools/make_conformance.py --check`.
+
+API changes from 1.x (source-incompatible where noted):
+
+- `rv565_header_t` gains `version`, `header_size`, `pixel_format`, `codec`
+  and `keyframe_interval`. Code that fills a header by hand must set them.
+- `rv565_frame_bytes()` is a function instead of a static inline and follows
+  the pixel format.
+- `RV565_MAX_FPS` is 60 (version 7); `RV565_MAX_FPS_V6` is 30.
+  `RV565_HEADER_SIZE` is replaced by `RV565_HEADER_SIZE_V6` (12) and
+  `RV565_HEADER_SIZE_V7` (16, the minimum).
+- `rv565_clip_t.index[i]` points just past each record's length: at the type
+  byte in version 7. `rv565_payload()` returns the body without the type
+  byte (length 0 for a repeat).
+- `rv565_decode_frame(clip, i, dst, len)` decodes in place: a keyframe on its
+  own, otherwise `dst` must hold frame i−1, and a zlib delta returns
+  `RV565_ERR_ARG` (use `rv565_decode()` with scratch or two buffers).
+- `rv565_parse_header()` returns `RV565_ERR_TRUNCATED` (not
+  `RV565_ERR_ARG`) for fewer than 12 bytes.
+- New status codes: `RV565_ERR_FORMAT`, `RV565_ERR_KEYFRAME`,
+  `RV565_ERR_RECORD`, `RV565_ERR_UNSUPPORTED`.
+- `rv565_decoder_ops_t.start` takes the previous frame:
+  `start(ctx, index, prev, dst, dst_len)`, and the struct gains an optional
+  `decode` hook for the serial path. Backends call `rv565_decode(clip,
+  index, prev, dst, dst_len, NULL, 0)`.
+- `rv565_player_t`: `frames[1]` is required for clips with zlib deltas,
+  even on the serial path; the state fields `ready_frame` and the meaning of
+  `current` changed (`held[]`, `gen[]`, `sent`, `sent_gen`).
+
+- CircuitPython library 2.0.0 (`ports/circuitpython/`): reads format
+  version 7 as well as version 6, with every pixel format, the stored and
+  zlib codecs, and keyframe, XOR delta and repeat frames, validated on open
+  and indexing as the reference does, and checked in host tests against every
+  conformance vector in `tests/data/v7` (in order and by random seeks). It
+  decodes into one reused frame buffer, so `Clip.frame()` returns a buffer
+  that the next call overwrites, and XORs deltas in 2 KiB chunks through long
+  integers. `Player` shows `rgb565be`, `rgb565le`, `gray8`, `gray4` and
+  `mono`, and `DirectPlayer` sends `rgb565be` and `rgb666` (COLMOD 0x66);
+  both skip repeat frames and name the supported formats for any other clip.
+  The version 7 paths have not yet run on a board.
 - Experimental CircuitPython library, `ports/circuitpython/`
   (`circuitpython_rv565`): reads version 6 files from a path, file object or
   bytes with a lazily built frame index, inflates with the built-in `zlib`,
@@ -12,6 +115,12 @@ All notable changes to RV565 are listed here. The project follows
   bus (`DirectPlayer`), paced to the clip's rate with frame skipping. Host
   tests with CPython and fake `displayio`; not yet run on a board. Expect a
   few FPS ([#30](https://github.com/elixpo/rv565/issues/30)).
+- `contrib/`: the FFmpeg patches (now two, `avcodec` and `avformat`) read
+  and write format version 7, with every pixel format, stored or zlib frames,
+  keyframe/delta/repeat frames and keyframe seeking, and still read and write
+  version 6; they pass the `tests/data/v7` conformance vectors and FATE. The
+  `file(1)`, shared-mime-info, PRONOM and Kaitai Struct signatures recognise
+  version 7 as well as version 6.
 
 ## 1.2.0 — 2026-11-04
 

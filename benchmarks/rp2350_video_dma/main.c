@@ -100,8 +100,15 @@ static rv565_status_t mjpeg_open(rv565_clip_t *clip, const uint8_t *data, size_t
     clip->header.fps = data[8];
     clip->header.flags = 0;
     clip->header.frames = (uint16_t)rd16(data + 10);
+    /* Every frame stands alone, as in an RV565 version 6 file, so the player
+     * never asks for a previous frame. */
+    clip->header.version = RV565_CONTAINER_V6;
+    clip->header.header_size = MJPEG_HEADER_SIZE;
+    clip->header.pixel_format = RV565_PIXEL_RGB565BE;
+    clip->header.codec = RV565_CODEC_ZLIB;
+    clip->header.keyframe_interval = 1;
     const rv565_header_t *h = &clip->header;
-    if (!h->width || !h->height || !h->fps || h->fps > RV565_MAX_FPS || !h->frames ||
+    if (!h->width || !h->height || !h->fps || h->fps > RV565_MAX_FPS_V6 || !h->frames ||
             h->frames > MAX_FRAMES) {
         return RV565_ERR_HEADER;
     }
@@ -178,8 +185,9 @@ static void core1_main(void)
     }
 }
 
-static void jpeg_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+static void jpeg_start(void *ctx, uint16_t index, const uint8_t *prev, uint8_t *dst, size_t len)
 {
+    (void)prev;
     (void)len;
     job.clip = ctx;
     job.index = index;
@@ -196,41 +204,21 @@ static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
 }
 #else
 /* Serial: decode, then transfer, on core 0, decoding only the frame that is
- * presented, as the RV565 serial path does. The library's serial path always
- * inflates, so present() decodes the frame into the player's current buffer
- * and marks it ready, and the backend's prefetch does nothing. (Prefetching
- * here would decode every skipped frame too, which RV565 serial never does.) */
-static void jpeg_start(void *ctx, uint16_t index, uint8_t *dst, size_t len)
+ * presented, as the RV565 serial path does: the player calls this backend
+ * in place of rv565_decode(). */
+static rv565_status_t jpeg_decode(void *ctx, uint16_t index, const uint8_t *prev,
+                                  uint8_t *dst, size_t len)
 {
-    (void)ctx;
-    (void)index;
-    (void)dst;
+    (void)prev;
     (void)len;
+    return jpeg_decode_frame(ctx, index, dst);
 }
-
-static rv565_status_t jpeg_finish(void *ctx, uint32_t *decode_us)
-{
-    (void)ctx;
-    *decode_us = 0;
-    return RV565_OK;
-}
-#define MJPEG_SERIAL 1
 #endif
 #endif /* CODEC_MJPEG */
 
 static bool present(rv565_player_t *player, uint16_t frame, frame_sample_t *sample)
 {
     rv565_frame_stats_t stats;
-    uint32_t decode_us = 0;
-#ifdef MJPEG_SERIAL
-    const uint32_t t = time_us_32();
-    if (jpeg_decode_frame(player->clip, frame, player->frames[player->current]) != RV565_OK) {
-        return false;
-    }
-    decode_us = time_us_32() - t;
-    player->ready_frame = frame;          /* the player sends it without decoding */
-    player->ready_inflate_us = decode_us;
-#endif
     if (rv565_player_present(player, frame, &stats) != RV565_OK) {
         return false;
     }
@@ -238,7 +226,7 @@ static bool present(rv565_player_t *player, uint16_t frame, frame_sample_t *samp
     sample->scale_us = stats.scale_us;
     sample->dma_wait_us = stats.wait_us;
     sample->lcd_us = stats.transfer_us;
-    sample->work_us = stats.work_us + decode_us;  /* decode ran before the player's clock */
+    sample->work_us = stats.work_us;
     return true;
 }
 
@@ -255,7 +243,7 @@ static void print_metadata(const rv565_clip_t *clip, uint32_t warmup, uint32_t c
 #if CODEC_MJPEG
     printf("RV565_META,container_version=1\n");
 #else
-    printf("RV565_META,container_version=%u\n", RV565_CONTAINER_V6);
+    printf("RV565_META,container_version=%u\n", clip->header.version);
 #endif
     printf("RV565_META,container_bytes=%u\n", (unsigned)(rv565_video_end - rv565_video_start));
     printf("RV565_META,warmup_frames=%lu\n", (unsigned long)warmup);
@@ -270,8 +258,9 @@ static void print_metadata(const rv565_clip_t *clip, uint32_t warmup, uint32_t c
     printf("RV565_READY\n");
 }
 
-/* Advance to the next source frame, skipping frames (never decoding them)
- * while more than one period late; returns the number skipped. */
+/* Advance to the next source frame, skipping frames (never displaying them;
+ * the player decodes only the delta records the next frame depends on) while
+ * more than one period late; returns the number skipped. */
 static uint32_t pace(const rv565_clip_t *clip, uint16_t *frame, uint64_t *deadline,
                      uint64_t period, uint64_t now)
 {
@@ -365,7 +354,7 @@ int main(void)
         .panel_height = PANEL_H,
         .stripe_rows = STRIPE_ROWS,
         .stripes = { stripes[0], stripes[1] },
-        .frames = { frames[0], (RV565_OVERLAP || CODEC_MJPEG) ? frames[1] : NULL },
+        .frames = { frames[0], frames[1] },  /* frames[1]: overlap, or zlib deltas */
         .xmap = xmap,
         .ymap = ymap,
         .micros = rv565_rp2_micros,
@@ -381,8 +370,12 @@ int main(void)
     multicore_launch_core1_with_stack(core1_main, core1_stack, sizeof(core1_stack));
 #endif
     player.decoder.ctx = &clip;
+#if RV565_OVERLAP
     player.decoder.start = jpeg_start;
     player.decoder.finish = jpeg_finish;
+#else
+    player.decoder.decode = jpeg_decode;
+#endif
 #elif RV565_OVERLAP
     if ((st = rv565_rp2_decoder_init(&clip, &player.decoder)) != RV565_OK) fail("decoder", st);
 #endif

@@ -62,7 +62,15 @@ class CoreTests(unittest.TestCase):
 
     def test_write_validates(self):
         with self.assertRaises(rv565.RV565Error):
-            rv565.write(io.BytesIO(), 4, 4, 31, [bytes(32)])
+            rv565.write(io.BytesIO(), 4, 4, 61, [bytes(32)])
+        with self.assertRaises(rv565.RV565Error):
+            rv565.write(io.BytesIO(), 4, 4, 31, [bytes(32)], version=6)
+        with self.assertRaises(rv565.RV565Error):
+            rv565.write(io.BytesIO(), 4, 4, 24, [bytes(16)], pixel_format="gray8", version=6)
+        with self.assertRaises(rv565.RV565Error):
+            rv565.write(io.BytesIO(), 4, 4, 24, [bytes(32)], keyframe_interval=0)
+        with self.assertRaises(rv565.RV565Error):
+            rv565.write(io.BytesIO(), 4, 4, 24, [bytes(32)], pixel_format="rgb555")
         with self.assertRaises(rv565.RV565Error):
             rv565.write(io.BytesIO(), 4, 4, 24, [bytes(31)])
         with self.assertRaises(rv565.RV565Error):
@@ -85,14 +93,99 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rv565.rgb565be_to_rgb888(be), rgb)
 
 
+V7 = ROOT / "tests" / "data" / "v7"
+
+
+class ConformanceTests(unittest.TestCase):
+    """The reference must match the committed vectors (tests/data/v7)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls.manifest = json.loads((V7 / "manifest.json").read_text())
+
+    def test_valid_sequential_and_seek(self):
+        import hashlib
+        import random
+        for entry in self.manifest["valid"]:
+            with self.subTest(entry["file"]):
+                clip = rv565.open(V7 / entry["file"])
+                h = clip.header
+                self.assertEqual((h.version, h.width, h.height, h.fps, len(clip), h.pixel_format,
+                                  h.codec, h.keyframe_interval, h.frame_bytes),
+                                 (entry["version"], entry["width"], entry["height"], entry["fps"],
+                                  entry["frames"], entry["pixel_format"], entry["codec"],
+                                  entry["keyframe_interval"], entry["frame_bytes"]))
+                self.assertEqual([clip.frame_type(i) for i in range(len(clip))],
+                                 entry["frame_types"])
+                got = [hashlib.sha256(f).hexdigest() for f in clip]
+                self.assertEqual(got, entry["frame_sha256"])
+                order = list(range(len(clip)))
+                random.Random(entry["file"]).shuffle(order)
+                for i in order:
+                    fresh = rv565.open(V7 / entry["file"])
+                    self.assertEqual(hashlib.sha256(fresh.frame(i)).hexdigest(),
+                                     entry["frame_sha256"][i])
+
+    def test_invalid(self):
+        for entry in self.manifest["invalid"]:
+            with self.subTest(entry["file"]):
+                data = (V7 / entry["file"]).read_bytes()
+                if entry["stage"] == "open":
+                    with self.assertRaises(rv565.RV565Error):
+                        rv565.open(data)
+                else:
+                    clip = rv565.open(data)
+                    with self.assertRaises(rv565.RV565Error):
+                        clip.verify()
+
+    def test_round_trip_every_format(self):
+        rgb = bytes((x * 37 + y * 11) % 256 for y in range(7) for x in range(3 * 9))
+        rgb2 = bytes((v + 64) % 256 for v in rgb)
+        for fmt in rv565.PIXEL_FORMATS:
+            for codec in rv565.CODECS:
+                with self.subTest(fmt=fmt, codec=codec):
+                    a, b = (rv565.convert(x, 9, 7, fmt) for x in (rgb, rgb2))
+                    frames = [a, a, b, a, b, b]
+                    buf = io.BytesIO()
+                    rv565.write(buf, 9, 7, 60, frames, pixel_format=fmt, codec=codec,
+                                keyframe_interval=3)
+                    clip = rv565.open(buf.getvalue())
+                    self.assertEqual(list(clip), frames)
+                    self.assertEqual(clip.frame_type(1), "repeat")
+                    self.assertEqual(clip.frame(4), b)
+                    self.assertEqual(rv565.convert(rv565.to_rgb888(a, 9, 7, fmt), 9, 7, fmt), a)
+
+    def test_write_v6_matches_vector(self):
+        buf = io.BytesIO()
+        rv565.write(buf, 180, 135, 24, testpattern_frames(24, 180, 135), 9, version=6)
+        self.assertEqual(list(rv565.open(buf.getvalue())), list(rv565.open(VECTOR)))
+        self.assertEqual(buf.getvalue()[3], 6)
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "rv565.py"), *args],
                               capture_output=True, text=True, check=True).stdout
 
     def test_info_and_verify(self):
-        self.assertIn("180x135, 24 FPS, 24 frames", self.run_cli("info", str(VECTOR)))
+        self.assertIn("v6, 180x135, 24 FPS, 24 frames", self.run_cli("info", str(VECTOR)))
         self.assertIn("24 frames verified", self.run_cli("verify", str(VECTOR)))
+        info = self.run_cli("info", str(V7 / "mono_vpage_zlib_k4.rv565"))
+        self.assertIn("mono_vpage, 42 bytes per frame", info)
+        self.assertIn("3 key, 6 delta, 1 repeat", info)
+        self.assertIn("keyframe interval 4", info)
+
+    def test_testpattern_formats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "tp.rv565")
+            self.run_cli("testpattern", out, "--v6")
+            self.assertEqual(Path(out).read_bytes()[3], 6)
+            self.run_cli("testpattern", out, "--format", "gray4", "--size", "33x20", "--fps", "60")
+            clip = rv565.open(out)
+            self.assertEqual((clip.pixel_format, clip.fps, clip.header.keyframe_interval),
+                             ("gray4", 60, 60))
+            self.assertEqual(clip.verify(), 24)
 
     def test_c_array(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +213,24 @@ class PillowTests(unittest.TestCase):
         frames[0].save(buf, format="RV565", save_all=True, append_images=frames[1:], fps=24)
         clip = rv565.open(buf.getvalue())
         self.assertEqual(list(clip), list(rv565.open(VECTOR)))
+
+    def test_open_v7_formats(self):
+        for name in ("rgb888_zlib_k4.rv565", "mono_vpage_stored_k3.rv565", "gray4_zlib_k4.rv565"):
+            with self.subTest(name), Image.open(V7 / name) as im:
+                clip = rv565.open(V7 / name)
+                self.assertEqual((im.size, im.mode, im.n_frames), ((21, 13), "RGB", 10))
+                im.seek(7)
+                self.assertEqual(im.tobytes(), rv565.to_rgb888(clip.frame(7), 21, 13,
+                                                               clip.pixel_format))
+
+    def test_save_v7_options(self):
+        frames = [Image.new("RGB", (16, 8), c) for c in ("white", "white", "black")]
+        buf = io.BytesIO()
+        frames[0].save(buf, format="RV565", save_all=True, append_images=frames[1:], fps=50,
+                       pixel_format="mono", keyframe_interval=3)
+        clip = rv565.open(buf.getvalue())
+        self.assertEqual((clip.pixel_format, clip.fps, clip.frame_type(1)), ("mono", 50, "repeat"))
+        self.assertEqual(clip.frame(2), bytes(16))
 
     def test_save_from_duration(self):
         frames = [Image.new("RGB", (8, 8), c) for c in ("red", "blue")]

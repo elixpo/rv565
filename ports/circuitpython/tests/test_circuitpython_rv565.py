@@ -69,7 +69,7 @@ class ReaderTest(unittest.TestCase):
 
     def test_all_frames_match_zlib_from_path(self):
         with rv565.open(str(VECTOR)) as clip:
-            self.assertEqual(list(clip), self.expected)
+            self.assertEqual([bytes(f) for f in clip], self.expected)
 
     def test_file_object_is_not_closed(self):
         stream = io.BytesIO(self.data)
