@@ -5,6 +5,30 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+Version 2.0.0 introduces RV565 format version 7 (`docs/FORMAT.md`): the
+header declares one of nine pixel formats (`rgb565be`, `rgb565le`, `rgb444`,
+`rgb666`, `rgb888`, `gray8`, `gray4`, `mono`, `mono_vpage`) and a codec
+(stored or zlib), frames are keyframes, exact XOR deltas or repeats, and a
+keyframe interval keeps seeking bounded. Version 6 files stay readable
+everywhere.
+
+- Conformance vectors in `tests/data/v7` (27 valid files with each decoded
+  frame's SHA-256, 20 invalid files with the stage that must reject them),
+  written and checked by `tools/make_conformance.py`. Every implementation
+  is tested against them in CI.
+- Python package 2.0.0, the reference implementation: `rv565.write()` takes
+  `pixel_format`, `codec`, `keyframe_interval` and `version=6`;
+  `rv565.convert()` and `rv565.to_rgb888()` handle every pixel format;
+  `Clip.frame_type()`, and `Header` gains `version`, `header_size`,
+  `pixel_format`, `codec` and `keyframe_interval`. `rv565 encode` and
+  `testpattern` take `--format`, `--codec`, `--keyframe-interval` and `--v6`;
+  `encode` now writes version 7 with one keyframe per second by default.
+  `rv565 info` reports the format, codec and frame types. The Pillow plugin
+  opens every pixel format and saves with the same options.
+- `docs/RESULTS_V7.md`: on the paper's film windows, version 7 with one
+  keyframe per second is 4.8–5.5× (W90) and 1.8–2.0× (W360) smaller than
+  version 6. File sizes only; playback on hardware is not measured yet.
+
 Version 2.0.0 of the C library reads RV565 format version 7
 (`docs/FORMAT.md`) and keeps reading version 6.
 
