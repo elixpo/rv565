@@ -13,10 +13,26 @@ them in pure Python with CircuitPython's built-in ``zlib`` and shows them with
 ``displayio``.
 
 **Status: experimental.** It passes host tests against the RV565 test vector
-(every frame matches CPython's zlib) but has not yet been run on a
-CircuitPython board.
+(every frame matches CPython's zlib) and plays on a Raspberry Pi Pico 2
+under CircuitPython 10.3.1 (measurements below).
 
-**Expect a few frames per second, not 24.** The C library reaches 24 FPS by
+Measured on a Raspberry Pi Pico 2 (RP2350, CircuitPython 10.3.1), playing
+the 180x135, 24 FPS test pattern to a 320x240 ST7789 on SPI at 40 MHz
+(2026-11-11):
+
+==================  =======  ===================  =================
+Player              FPS      inflate per frame    draw per frame
+==================  =======  ===================  =================
+``Player``          8.0      51.0 ms              73.3 ms
+``DirectPlayer``    16.5     47.7 ms              12.6 ms
+==================  =======  ===================  =================
+
+``DirectPlayer``'s draw is close to the SPI wire time (9.7 ms for the frame),
+so inflating with CircuitPython's ``zlib`` (about 48 ms a frame, against about
+16 ms for the C library's ``tinfl`` on the same chip) is what limits it.
+Film clips compress less than the test pattern and inflate more slowly.
+
+**Expect a fraction of the clip's rate, not 24.** The C library reaches 24 FPS by
 inflating on one core while DMA sends the previous frame from the other.
 Here, inflating and drawing happen one after the other in a single Python
 thread, so a 180x135 clip will play at a fraction of its rate. Frames that
@@ -114,7 +130,8 @@ MicroPython benchmarks use) before playing and back to ``0xC0``
 (``adafruit_st7789``'s value) afterwards; pass ``madctl=`` and
 ``restore_madctl=`` for other orientations or drivers. Modules smaller than
 the controller's 240x320 RAM need ``x_offset``/``y_offset`` as well. This
-path has not yet been checked on hardware under CircuitPython.
+path's timing is measured on a Pico 2 (above); its picture orientation and
+offsets have not yet been confirmed on a panel.
 
 Examples
 --------
@@ -144,7 +161,7 @@ Submitting to the Community Bundle
 ----------------------------------
 
 The library is laid out like an Adafruit cookiecutter library so it can move
-out unchanged when it has run on hardware:
+out unchanged now that it has run on hardware:
 
 1. Create a repository named ``CircuitPython_RV565`` with the contents of
    this folder (the module, ``examples/``, ``docs/``, ``tests/``,

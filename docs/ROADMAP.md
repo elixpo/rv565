@@ -73,8 +73,10 @@ without C. Pure Python, so a few FPS rather than 24.
 - [x] 🤖 Examples (any `board.DISPLAY`, Pico 2 + ST7789 on SPI0, ESP32-S3 TFT
       Feather), host tests with fake `displayio` (all 24 test-pattern frames
       match zlib), cookiecutter-style packaging.
-- [ ] 🙋 Run the test pattern on a Pico 2 with CircuitPython (displayio and
-      direct examples) and record the achieved FPS in its README.
+- [x] 🙋 Run the test pattern on a Pico 2 with CircuitPython (displayio and
+      direct examples) and record the achieved FPS in its README: 8.0 FPS
+      through displayio, 16.5 FPS with `DirectPlayer` (CircuitPython 10.3.1,
+      2026-11-11).
 - [ ] 🙋 Run it on an ESP32-S3 CircuitPython board.
 - [ ] 🤖 Then: own `CircuitPython_RV565` repository with the cookiecutter CI,
       and a PR to the Adafruit CircuitPython Community Bundle.
