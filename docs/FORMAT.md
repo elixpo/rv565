@@ -9,6 +9,9 @@ formats, from RGB565 and RGB888 for colour TFTs to 4-bit grayscale and 1-bit
 monochrome for OLED, e-paper and memory LCDs, and one of two codecs (stored or
 zlib). Frames are keyframes, XOR differences from the previous frame, or
 repeats of it, and a keyframe interval in the header keeps seeking O(1).
+Partial deltas store only the bands of rows that changed, so a player decodes
+and sends to the display only those bands: on these boards the display bus,
+not the decoder, limits the frame rate.
 
 Version 7 readers also read version 6 files (see
 [Version 6](#version-6)), which are the special case RGB565 big-endian, zlib,
@@ -66,8 +69,23 @@ file ends exactly after the last one. Each record is:
 | 0 | Keyframe | the frame, encoded with the codec | the decoded body |
 | 1 | Delta | `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1] XOR` the decoded body |
 | 2 | Repeat | empty (`L` = 1) | `F[i−1]` |
+| 3 | Partial delta | band height, band mask, then the changed bands of `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1]` with the changed bands XORed |
 
 Other types are reserved; readers reject them.
+
+**Partial delta.** The frame's bytes are `P` lines of `R` bytes each: pixel
+rows for formats 0–7 (`P = h`), pages of 8 rows for `mono_vpage` (`P = ⌈h /
+8⌉`, `R = w`). The body is:
+
+| Size | Field |
+| --- | --- |
+| 1 | Band height `B` in lines, ≥ 1 |
+| `⌈N / 8⌉` | Band mask: bit `b mod 8` (least significant first) of byte `⌊b / 8⌋` is set when band `b` changed. `N = ⌈P / B⌉`; band `b` is lines `bB` to `min(P, (b + 1)B) − 1`. At least one bit is set, and bits from `N` on are zero |
+| rest | The changed bands of `F[i] XOR F[i−1]`, in band order, concatenated and encoded with the codec |
+
+The decoded data is exactly as long as the changed bands together, and is
+XORed into those bands of `F[i−1]`; every other band is unchanged. A player
+may send only the changed bands to the display.
 
 **Keyframe interval.** Every frame `i` with `i mod K = 0` must be a
 keyframe, frame 0 included. Encoders may make other frames keyframes too. A
@@ -75,18 +93,20 @@ reader seeking to frame `i` can therefore start at keyframe `i − (i mod K)`
 and apply at most `K − 1` records, without scanning the file. `K` = 1 makes
 every frame a keyframe, as in version 6.
 
-**Delta and repeat** frames are exact: XOR is applied to the frame's encoded
+**Delta, partial delta and repeat** frames are exact: XOR is applied to the frame's encoded
 bytes, so the result is bit-identical to the source frame in its pixel
 format, padding bits included.
 
 ## Codecs
 
-| Value | Codec | Body of a keyframe or delta |
+| Value | Codec | Encoded data |
 | --- | --- | --- |
-| 0 | Stored | the frame bytes as they are; length exactly `S` |
-| 1 | zlib | a zlib stream (RFC 1950 wrapping RFC 1951 Deflate) that inflates to exactly `S` bytes |
+| 0 | Stored | the bytes as they are |
+| 1 | zlib | a zlib stream (RFC 1950 wrapping RFC 1951 Deflate) |
 
-`S` is the frame size from the pixel format table. Values 2–255 are reserved
+The data decodes to exactly `S` bytes for a keyframe or delta, and to the
+total size of the changed bands for a partial delta. `S` is the frame size
+from the pixel format table. Values 2–255 are reserved
 (2 is set aside for LZ4); readers reject them.
 
 Stored suits displays whose bus is fast and whose CPU is slow, and clips that
@@ -126,7 +146,10 @@ A conforming reader rejects a file when any of these hold:
 - a frame `i` with `i mod K = 0` is not a keyframe;
 - a repeat record has a body, or a stored keyframe or delta body is not
   exactly `S` bytes;
-- a zlib body does not inflate to exactly `S` bytes.
+- a partial delta has `B` = 0, is too short for its mask, sets no band or a
+  bit from `N` on, or (stored) its data is not exactly the size of its
+  changed bands;
+- zlib data does not inflate to exactly its expected size.
 
 All but the last are checked when the file is opened, by one linear scan of
 the record lengths that also builds the frame index. Readers may also reject
@@ -138,7 +161,10 @@ A player decoding frames in order keeps the previous frame, which it already
 has for the display. Keyframes decode on their own; a delta decodes into the
 frame buffer and is then XORed with the previous frame (or, in place, decodes
 to a scratch buffer of `S` bytes and is XORed into the previous frame); a
-repeat costs nothing and need not be sent to the display again.
+repeat costs nothing and need not be sent to the display again. A partial
+delta is decoded like a delta but only over its changed bands, and only those
+bands need to be sent to the display: on SPI panels, set the column and row
+window to each run of changed bands.
 
 To seek to frame `i`, decode keyframe `k = i − (i mod K)`, then apply records
 `k + 1` … `i`.
@@ -149,15 +175,27 @@ One linear scan of the record lengths gives every record's offset, after
 which lookup is O(1). Inflate time depends only on the body: the RV565 paper
 (arXiv:2610.35935) measured it as linear in `L` on the ESP32-S3, so a reader
 can predict from the length table alone whether a clip will play at its rate
-before decoding anything. A delta adds one pass of XOR over `S` bytes.
+before decoding anything. A delta adds one pass of XOR over `S` bytes; a
+partial delta, one pass over its changed bands. The band mask also tells a
+player how much of the frame it must transfer, before decoding.
 
 ## Writing
 
 The reference encoder (`rv565 encode`, the `rv565` Python package) converts
 and resamples on the host, so the device only decodes and transfers. With
 `K` > 1 it writes a repeat when a frame equals the previous one, and otherwise
-the smaller of a delta and a keyframe. It uses zlib level 1, the
-configuration the paper measured, unless told otherwise.
+the smallest of a delta and a keyframe, or a partial delta (bands of 8 lines
+by default) when it is at most 2% (and at least 16 bytes) larger, because it
+saves the display transfer of every unchanged band. It uses zlib level 1, the configuration the paper measured, unless
+told otherwise.
+
+**Tolerance** (encoder only; the format is unchanged). With a tolerance `T`
+of 1–255, the encoder keeps a pixel of the previous decoded frame wherever
+every channel of the new pixel, expanded to 8 bits, is within `T` of it.
+The encoder compares against what the decoder will show, so no pixel is ever
+more than `T` from the source frame converted to the pixel format, and
+unchanged regions become repeats and skipped bands. `T` = 0, the default, is
+lossless.
 
 Colour conversion from 8-bit RGB, used by every reference encoder so that
 they produce identical frames:
@@ -182,7 +220,7 @@ a keyframe. Writers can still produce it for players that predate 2.0.
 ## Conformance vectors
 
 `tests/data/v7/` holds one file per pixel format and codec, clips with
-deltas and repeats, the version 6 test pattern, and invalid files.
+deltas, partial deltas and repeats, the version 6 test pattern, and invalid files.
 `tests/data/v7/manifest.json` lists, for every valid file, its header fields
 and the SHA-256 of each decoded frame, and for every invalid file the reason
 it must be rejected. Every RV565 implementation (the C library, the Python

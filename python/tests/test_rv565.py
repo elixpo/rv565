@@ -120,6 +120,8 @@ class ConformanceTests(unittest.TestCase):
                                  entry["frame_types"])
                 got = [hashlib.sha256(f).hexdigest() for f in clip]
                 self.assertEqual(got, entry["frame_sha256"])
+                self.assertEqual([[list(r) for r in clip.changed_lines(i)]
+                                  for i in range(len(clip))], entry["changed_lines"])
                 order = list(range(len(clip)))
                 random.Random(entry["file"]).shuffle(order)
                 for i in order:
@@ -156,6 +158,36 @@ class ConformanceTests(unittest.TestCase):
                     self.assertEqual(clip.frame(4), b)
                     self.assertEqual(rv565.convert(rv565.to_rgb888(a, 9, 7, fmt), 9, 7, fmt), a)
 
+    def test_tolerance_bounds_error(self):
+        import random
+        rnd = random.Random(7)
+        base = bytes(rnd.randrange(256) for _ in range(3 * 12 * 9))
+        noisy = [bytes(min(255, max(0, b + rnd.randint(-6, 6))) for b in base) for _ in range(8)]
+        for fmt in ("rgb565be", "rgb888", "gray8", "gray4", "rgb444"):
+            frames = [rv565.convert(f, 12, 9, fmt) for f in noisy]
+            for tol in (0, 4, 12):
+                with self.subTest(fmt=fmt, tol=tol):
+                    buf = io.BytesIO()
+                    rv565.write(buf, 12, 9, 24, frames, pixel_format=fmt, keyframe_interval=8,
+                                tolerance=tol)
+                    for got, want in zip(rv565.open(buf.getvalue()), frames):
+                        a = rv565.to_rgb888(got, 12, 9, fmt)
+                        b = rv565.to_rgb888(want, 12, 9, fmt)
+                        self.assertLessEqual(max(abs(x - y) for x, y in zip(a, b)), tol)
+
+    def test_partial_frames_written(self):
+        buf = io.BytesIO()
+        top = bytes(2 * 16 * 8)
+        frames = [top + bytes(2 * 16 * 8), top + bytes([1]) * (2 * 16 * 8)]
+        rv565.write(buf, 16, 16, 24, frames, keyframe_interval=4)
+        clip = rv565.open(buf.getvalue())
+        self.assertEqual(clip.frame_type(1), "partial")
+        self.assertEqual(clip.changed_lines(1), [(8, 8)])
+        self.assertEqual(list(clip), frames)
+        buf = io.BytesIO()
+        rv565.write(buf, 16, 16, 24, frames, keyframe_interval=4, band_lines=0)
+        self.assertEqual(rv565.open(buf.getvalue()).frame_type(1), "delta")
+
     def test_write_v6_matches_vector(self):
         buf = io.BytesIO()
         rv565.write(buf, 180, 135, 24, testpattern_frames(24, 180, 135), 9, version=6)
@@ -173,7 +205,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("24 frames verified", self.run_cli("verify", str(VECTOR)))
         info = self.run_cli("info", str(V7 / "mono_vpage_zlib_k4.rv565"))
         self.assertIn("mono_vpage, 42 bytes per frame", info)
-        self.assertIn("3 key, 6 delta, 1 repeat", info)
+        self.assertIn("3 key, 6 delta, 0 partial, 1 repeat", info)
         self.assertIn("keyframe interval 4", info)
 
     def test_testpattern_formats(self):

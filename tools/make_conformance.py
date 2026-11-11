@@ -65,10 +65,23 @@ def valid_vectors():
     return vectors
 
 
-def build_valid(name, fmt, codec, interval, frames):
+def partial_vectors():
+    """Clips whose deltas are partial: bands of 4 lines (13 rows, so 4 bands,
+    the last one short; mono_vpage has 2 pages, so bands of 1 page)."""
+    rgb = rgb_frames()
+    vectors = []
+    for fmt in rv565.PIXEL_FORMATS:
+        frames = [rv565.convert(f, WIDTH, HEIGHT, fmt) for f in rgb]
+        band = 1 if fmt == "mono_vpage" else 4
+        vectors.append(("%s_zlib_partial_k5" % fmt, fmt, "zlib", 5, frames, band))
+        vectors.append(("%s_stored_partial_k5" % fmt, fmt, "stored", 5, frames, band))
+    return vectors
+
+
+def build_valid(name, fmt, codec, interval, frames, band_lines=0):
     buf = io.BytesIO()
     rv565.write(buf, WIDTH, HEIGHT, FPS, frames, 9, pixel_format=fmt, codec=codec,
-                keyframe_interval=interval)
+                keyframe_interval=interval, band_lines=band_lines)
     return buf.getvalue()
 
 
@@ -117,10 +130,25 @@ def invalid_vectors():
         ("pixel_format_9", "open", "pixel_format", header(fmt=9) + key0 + delta1),
         ("codec_2", "open", "codec", header(codec=2) + key0 + delta1),
         ("keyframe_interval_0", "open", "keyframe_interval", header(interval=0) + key0 + delta1),
-        ("frame_type_3", "open", "frame_type", header() + key0 + record(3, b"x")),
+        ("frame_type_4", "open", "frame_type", header() + key0 + record(4, b"x")),
         ("first_frame_delta", "open", "keyframe", header() + delta1 + delta1),
         ("missing_keyframe", "open", "keyframe", header(interval=1) + key0 + delta1),
         ("repeat_with_body", "open", "repeat", header() + key0 + record(2, b"x")),
+        # Partial deltas: 4x2 rgb565be is 2 lines of 8 bytes, so bands of 1
+        # line give N = 2 and a 1-byte mask.
+        ("partial_band_0", "open", "partial",
+         header() + key0 + record(3, b"\x00\x01" + zlib.compress(f1[:8]))),
+        ("partial_short_mask", "open", "partial", header() + key0 + record(3, b"\x01")),
+        ("partial_no_band", "open", "partial",
+         header() + key0 + record(3, b"\x01\x00" + zlib.compress(b""))),
+        ("partial_band_past_end", "open", "partial",
+         header() + key0 + record(3, b"\x01\x05" + zlib.compress(f1[:8]))),
+        ("partial_stored_wrong_size", "open", "stored_size",
+         header(codec=0) + record(0, f0) + record(3, b"\x01\x01" + f1[:7])),
+        ("partial_at_keyframe", "open", "keyframe",
+         header() + record(3, b"\x01\x01" + zlib.compress(f0[:8])) + delta1),
+        ("partial_inflate_short", "decode", "inflate",
+         header() + key0 + record(3, b"\x01\x01" + zlib.compress(f1[:7]))),
         ("stored_wrong_size", "open", "stored_size",
          header(codec=0) + record(0, f0) + record(0, f1[:15])),
         ("zero_length", "open", "truncated", header() + key0 + struct.pack("<I", 0)),
@@ -155,6 +183,20 @@ def build():
             "frame_types": [clip.frame_type(i) for i in range(len(clip))],
             "frame_sha256": [sha(f) for f in frames],
         })
+    for name, fmt, codec, interval, frames, band in partial_vectors():
+        data = build_valid(name, fmt, codec, interval, frames, band)
+        clip = rv565.open(data)
+        assert list(clip) == frames, name
+        types = [clip.frame_type(i) for i in range(len(clip))]
+        assert "partial" in types, (name, types)
+        files[name + ".rv565"] = data
+        manifest["valid"].append({
+            "file": name + ".rv565", "version": 7, "width": WIDTH, "height": HEIGHT,
+            "fps": FPS, "frames": FRAMES, "pixel_format": fmt,
+            "pixel_format_id": rv565.PIXEL_FORMATS.index(fmt), "codec": codec,
+            "keyframe_interval": interval, "frame_bytes": len(frames[0]),
+            "frame_types": types, "frame_sha256": [sha(f) for f in frames],
+        })
     for fmt in ("rgb565be", "mono", "rgb444"):
         frames = [rv565.convert(f, WIDTH, HEIGHT, fmt) for f in rgb_frames()]
         for codec in ("stored", "zlib"):
@@ -180,6 +222,10 @@ def build():
         "keyframe_interval": 1, "frame_bytes": clip.header.frame_bytes,
         "frame_types": ["key"] * len(clip), "frame_sha256": [sha(f) for f in clip],
     })
+    for entry in manifest["valid"]:
+        data = files.get(entry["file"]) or (OUT / entry["file"]).read_bytes()
+        clip = rv565.open(data)
+        entry["changed_lines"] = [clip.changed_lines(i) for i in range(len(clip))]
     for name, stage, reason, data in invalid_vectors():
         files["invalid_" + name + ".rv565"] = data
         manifest["invalid"].append({"file": "invalid_" + name + ".rv565",

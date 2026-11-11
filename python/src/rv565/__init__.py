@@ -49,8 +49,9 @@ LENGTH = struct.Struct("<I")
 PIXEL_FORMATS = ("rgb565be", "rgb565le", "rgb444", "rgb666", "rgb888",
                  "gray8", "gray4", "mono", "mono_vpage")
 CODECS = ("stored", "zlib")
-KEYFRAME, DELTA, REPEAT = 0, 1, 2
-FRAME_TYPES = ("key", "delta", "repeat")
+KEYFRAME, DELTA, REPEAT, PARTIAL = 0, 1, 2, 3
+FRAME_TYPES = ("key", "delta", "repeat", "partial")
+BAND_LINES = 8  # default band height of the reference encoder
 
 
 class RV565Error(ValueError):
@@ -90,6 +91,35 @@ def frame_size(pixel_format, width, height):
     if fmt == "mono_vpage":
         return width * ((height + 7) // 8)
     return row_bytes(fmt, width) * height
+
+
+def frame_lines(pixel_format, width, height):
+    """(P, R): a frame is P lines of R bytes (pixel rows, or pages of 8 rows
+    for mono_vpage). Partial deltas divide the frame into bands of lines."""
+    fmt = PIXEL_FORMATS[_format_index(pixel_format)]
+    if fmt == "mono_vpage":
+        return (height + 7) // 8, width
+    return height, row_bytes(fmt, width)
+
+
+def _partial_layout(body, lines, line_bytes):
+    """Parse a partial delta body: (band height, changed bands, data offset,
+    decoded data size). Raises RV565Error if the header part is invalid."""
+    if len(body) < 1 or body[0] == 0:
+        raise RV565Error("partial delta with band height 0")
+    band = body[0]
+    count = (lines + band - 1) // band
+    mask_len = (count + 7) // 8
+    if len(body) < 1 + mask_len:
+        raise RV565Error("partial delta too short for its band mask")
+    mask = body[1:1 + mask_len]
+    changed = [b for b in range(count) if mask[b >> 3] >> (b & 7) & 1]
+    if not changed:
+        raise RV565Error("partial delta with no changed band")
+    if any(mask[b >> 3] >> (b & 7) & 1 for b in range(count, 8 * mask_len)):
+        raise RV565Error("partial delta sets a band past the frame")
+    size = sum((min(lines, (b + 1) * band) - b * band) * line_bytes for b in changed)
+    return band, changed, 1 + mask_len, size
 
 
 @dataclass(frozen=True)
@@ -181,9 +211,16 @@ class Clip:
                     raise RV565Error("frame %d must be a keyframe" % i)
                 if kind == REPEAT and length != 1:
                     raise RV565Error("repeat frame %d has a body" % i)
-                if kind != REPEAT and h.codec == "stored" and length - 1 != size:
+                if kind in (KEYFRAME, DELTA) and h.codec == "stored" and length - 1 != size:
                     raise RV565Error("stored frame %d has %d bytes, expected %d"
                                      % (i, length - 1, size))
+                if kind == PARTIAL:
+                    lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+                    _, _, start, want = _partial_layout(
+                        self.data[offset + 1:offset + length], lines, line_bytes)
+                    if h.codec == "stored" and length - 1 - start != want:
+                        raise RV565Error("stored partial frame %d has %d bytes, expected %d"
+                                         % (i, length - 1 - start, want))
             offsets.append((kind, body, offset + length - body))
             offset += length
         if offset != len(self.data):
@@ -212,6 +249,39 @@ class Clip:
         _, offset, length = self._index[self._check(i)]
         return self.data[offset:offset + length]
 
+    def _decode_data(self, i, data, size):
+        if self.header.codec == "stored":
+            return data
+        try:
+            out = zlib.decompress(data)
+        except zlib.error as exc:
+            raise RV565Error("frame %d does not inflate: %s" % (i, exc)) from None
+        if len(out) != size:
+            raise RV565Error("frame %d inflates to %d bytes, expected %d" % (i, len(out), size))
+        return out
+
+    def changed_lines(self, i):
+        """Line ranges (first, count) that frame i changes, so a player knows
+        what to send to the display: everything for a keyframe or delta,
+        nothing for a repeat, the changed bands (merged into runs) for a
+        partial delta. Lines are pixel rows, or pages of 8 rows for mono_vpage."""
+        h = self.header
+        lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+        kind = self._index[self._check(i)][0]
+        if kind == REPEAT:
+            return []
+        if kind != PARTIAL:
+            return [(0, lines)]
+        band, changed, _, _ = _partial_layout(self.payload(i), lines, line_bytes)
+        runs = []
+        for b in changed:
+            first, end = b * band, min(lines, (b + 1) * band)
+            if runs and runs[-1][0] + runs[-1][1] == first:
+                runs[-1] = (runs[-1][0], end - runs[-1][0])
+            else:
+                runs.append((first, end - first))
+        return runs
+
     def _body(self, i):
         body, size = self.payload(i), self.header.frame_bytes
         if self.header.codec == "stored":
@@ -230,6 +300,19 @@ class Clip:
             return self._body(i)
         if kind == REPEAT:
             return prev
+        if kind == PARTIAL:
+            h = self.header
+            lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+            body = self.payload(i)
+            band, changed, start, size = _partial_layout(body, lines, line_bytes)
+            data = self._decode_data(i, body[start:], size)
+            out, pos = bytearray(prev), 0
+            for b in changed:
+                lo = b * band * line_bytes
+                hi = min(lines, (b + 1) * band) * line_bytes
+                out[lo:hi] = _xor(out[lo:hi], data[pos:pos + hi - lo])
+                pos += hi - lo
+            return bytes(out)
         return _xor(prev, self._body(i))
 
     def frame(self, i):
@@ -324,41 +407,108 @@ def _encode(data, codec, level):
     return bytes(data) if codec == "stored" else zlib.compress(bytes(data), level)
 
 
+def _partial_body(frame, prev, lines, line_bytes, band, codec, level):
+    """Body of a partial delta (None if no band changed or the band height
+    does not fit in a byte)."""
+    if not 1 <= band <= 255:
+        return None
+    count = (lines + band - 1) // band
+    mask = bytearray((count + 7) // 8)
+    parts = []
+    for b in range(count):
+        lo, hi = b * band * line_bytes, min(lines, (b + 1) * band) * line_bytes
+        if frame[lo:hi] != prev[lo:hi]:
+            mask[b >> 3] |= 1 << (b & 7)
+            parts.append(_xor(frame[lo:hi], prev[lo:hi]))
+    if not parts:
+        return None
+    return bytes((band,)) + bytes(mask) + _encode(b"".join(parts), codec, level)
+
+
+def _apply_tolerance(frame, prev, width, height, fmt, tolerance):
+    """Keep each pixel of prev where every channel of frame, in 8 bits, is
+    within tolerance of it. Returns the frame the decoder will show."""
+    new = to_rgb888(frame, width, height, fmt)
+    old = to_rgb888(prev, width, height, fmt)
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    if np is not None:
+        a = np.frombuffer(new, np.uint8).reshape(-1, 3).astype(np.int16)
+        b = np.frombuffer(old, np.uint8).reshape(-1, 3).astype(np.int16)
+        keep = (np.abs(a - b) <= tolerance).all(axis=1)
+        mixed = np.where(keep[:, None], b, a).astype(np.uint8).tobytes()
+    else:
+        out = bytearray(new)
+        for p in range(0, len(new), 3):
+            if abs(new[p] - old[p]) <= tolerance and abs(new[p + 1] - old[p + 1]) <= tolerance \
+                    and abs(new[p + 2] - old[p + 2]) <= tolerance:
+                out[p:p + 3] = old[p:p + 3]
+        mixed = bytes(out)
+    return convert(mixed, width, height, fmt)
+
+
 def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec="zlib",
-                  keyframe_interval=1):
+                  keyframe_interval=1, band_lines=BAND_LINES, tolerance=0):
     """Yield (frame type, body) for each frame, already in ``pixel_format``.
 
     Frames at multiples of ``keyframe_interval`` are keyframes; any other frame
-    is a repeat when it equals the previous one, else the smaller of a delta
-    and a keyframe. ``level`` is the zlib level (1 is what the paper measured).
+    is a repeat when it equals the previous one, else the smallest of a
+    partial delta (bands of ``band_lines`` lines; 0 disables them), a delta
+    and a keyframe. ``level`` is the zlib level (1 is what the paper
+    measured). ``tolerance`` (0-255, default 0: lossless) keeps a pixel of
+    the previous decoded frame where every channel is within it, in 8 bits.
     """
     size = frame_size(pixel_format, width, height)
+    fmt = PIXEL_FORMATS[_format_index(pixel_format)]
     codec = CODECS[_codec_index(codec)]
+    lines, line_bytes = frame_lines(fmt, width, height)
     if keyframe_interval < 1 or keyframe_interval > 255:
         raise RV565Error("keyframe interval must be 1-255")
+    if not 0 <= tolerance <= 255:
+        raise RV565Error("tolerance must be 0-255")
     prev = None
     for i, frame in enumerate(frames):
         frame = bytes(frame)
         if len(frame) != size:
             raise RV565Error("frame %d has %d bytes, expected %d" % (i, len(frame), size))
+        if tolerance and prev is not None:
+            frame = _apply_tolerance(frame, prev, width, height, fmt, tolerance)
         if i % keyframe_interval == 0:
             yield KEYFRAME, _encode(frame, codec, level)
         elif frame == prev:
             yield REPEAT, b""
         else:
-            key = _encode(frame, codec, level)
-            delta = _encode(_xor(frame, prev), codec, level) if codec != "stored" else key
-            yield (DELTA, delta) if len(delta) < len(key) else (KEYFRAME, key)
+            options = [(KEYFRAME, _encode(frame, codec, level))]
+            if codec != "stored":
+                options.append((DELTA, _encode(_xor(frame, prev), codec, level)))
+            if band_lines:
+                partial = _partial_body(frame, prev, lines, line_bytes, band_lines, codec, level)
+                if partial is not None:
+                    options.append((PARTIAL, partial))
+            # The smallest body, except that a partial delta wins whenever it
+            # is at most 2% (and at least 16 bytes) larger: it saves the
+            # display transfer of every unchanged band, which on these boards
+            # costs more than a few bytes of inflate.
+            best = min(options, key=lambda o: (len(o[1]), o[0] != DELTA))
+            partial = [o for o in options if o[0] == PARTIAL]
+            if partial and len(partial[0][1]) <= len(best[1]) + max(16, len(best[1]) // 50):
+                best = partial[0]
+            yield best
         prev = frame
 
 
 def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be",
-          codec="zlib", keyframe_interval=1, version=VERSION):
+          codec="zlib", keyframe_interval=1, version=VERSION, band_lines=BAND_LINES,
+          tolerance=0):
     """Write frames (an iterable of bytes in ``pixel_format``) as an RV565 file.
 
     ``target`` is a path or a seekable binary file object. ``version=6``
     writes a version 6 file for players older than RV565 2.0; it allows only
-    rgb565be, zlib and keyframe_interval 1. Returns the number of frames.
+    rgb565be, zlib and keyframe_interval 1 (and so no partial deltas).
+    ``band_lines`` and ``tolerance`` are passed to encode_frames. Returns the
+    number of frames.
     """
     if not (0 < width <= 0xFFFF and 0 < height <= 0xFFFF):
         raise RV565Error("size %dx%d out of range" % (width, height))
@@ -375,13 +525,14 @@ def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be
         raise RV565Error("can write version 6 or 7, not %r" % (version,))
     if hasattr(target, "write"):
         return _write(target, width, height, fps, frames, level, fmt, cod,
-                      keyframe_interval, version)
+                      keyframe_interval, version, band_lines, tolerance)
     with Path(target).open("wb") as out:
         return _write(out, width, height, fps, frames, level, fmt, cod,
-                      keyframe_interval, version)
+                      keyframe_interval, version, band_lines, tolerance)
 
 
-def _write(out, width, height, fps, frames, level, fmt, codec, interval, version):
+def _write(out, width, height, fps, frames, level, fmt, codec, interval, version,
+           band_lines=BAND_LINES, tolerance=0):
     start = out.tell()
     if version == VERSION_6:
         out.write(HEADER_V6.pack(MAGIC, version, width, height, fps, 0, 0))
@@ -389,7 +540,8 @@ def _write(out, width, height, fps, frames, level, fmt, codec, interval, version
         out.write(HEADER.pack(MAGIC, version, width, height, fps, 0, 0,
                               HEADER.size, fmt, codec, interval))
     count = 0
-    for kind, body in encode_frames(frames, width, height, level, fmt, codec, interval):
+    for kind, body in encode_frames(frames, width, height, level, fmt, codec, interval,
+                                    band_lines, tolerance):
         count += 1
         if count > MAX_FRAMES:
             raise RV565Error("more than %d frames" % MAX_FRAMES)
