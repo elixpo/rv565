@@ -69,7 +69,7 @@ file ends exactly after the last one. Each record is:
 | 0 | Keyframe | the frame, encoded with the codec | the decoded body |
 | 1 | Delta | `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1] XOR` the decoded body |
 | 2 | Repeat | empty (`L` = 1) | `F[i−1]` |
-| 3 | Partial delta | band height, band mask, then the changed bands of `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1]` with the changed bands XORed |
+| 3 | Partial delta | band height, band mask, a shift for each changed band, then the changed bands' residuals, encoded with the codec | `F[i−1]` with each changed band replaced by its prediction XOR its residual |
 
 Other types are reserved; readers reject them.
 
@@ -81,11 +81,20 @@ rows for formats 0–7 (`P = h`), pages of 8 rows for `mono_vpage` (`P = ⌈h /
 | --- | --- |
 | 1 | Band height `B` in lines, ≥ 1 |
 | `⌈N / 8⌉` | Band mask: bit `b mod 8` (least significant first) of byte `⌊b / 8⌋` is set when band `b` changed. `N = ⌈P / B⌉`; band `b` is lines `bB` to `min(P, (b + 1)B) − 1`. At least one bit is set, and bits from `N` on are zero |
-| rest | The changed bands of `F[i] XOR F[i−1]`, in band order, concatenated and encoded with the codec |
+| 2 per changed band | Shift of each changed band, in band order: signed bytes `dx` (in bytes along the line) and `dy` (in lines), with `|dy|` < `B` |
+| rest | The residuals of the changed bands, in band order, concatenated and encoded with the codec |
 
-The decoded data is exactly as long as the changed bands together, and is
-XORed into those bands of `F[i−1]`; every other band is unchanged. A player
-may send only the changed bands to the display.
+The prediction of byte `j` of line `y` in a changed band is byte `j − dx` of
+line `y − dy` of `F[i−1]` when that line lies in the same band and
+`0 ≤ j − dx < R`, and 0 otherwise. The band of `F[i]` is its prediction XOR
+its residual. With `dx = dy = 0` the residual is simply `F[i] XOR F[i−1]`
+over the band; a shift lets scrolling text, lists and pans cost a small
+residual instead of a full one. The decoded data is exactly as long as the
+changed bands together; every other band is unchanged. A player may send only
+the changed bands to the display.
+
+A prediction never reaches outside its band, so a decoder working in place
+needs a scratch copy of one band, not of the previous frame.
 
 **Keyframe interval.** Every frame `i` with `i mod K = 0` must be a
 keyframe, frame 0 included. Encoders may make other frames keyframes too. A
@@ -146,9 +155,9 @@ A conforming reader rejects a file when any of these hold:
 - a frame `i` with `i mod K = 0` is not a keyframe;
 - a repeat record has a body, or a stored keyframe or delta body is not
   exactly `S` bytes;
-- a partial delta has `B` = 0, is too short for its mask, sets no band or a
-  bit from `N` on, or (stored) its data is not exactly the size of its
-  changed bands;
+- a partial delta has `B` = 0, is too short for its mask and shifts, sets no
+  band or a bit from `N` on, has a shift with `|dy|` ≥ `B`, or (stored) its
+  data is not exactly the size of its changed bands;
 - zlib data does not inflate to exactly its expected size.
 
 All but the last are checked when the file is opened, by one linear scan of
@@ -186,7 +195,15 @@ and resamples on the host, so the device only decodes and transfers. With
 `K` > 1 it writes a repeat when a frame equals the previous one, and otherwise
 the smallest of a delta and a keyframe, or a partial delta (bands of 8 lines
 by default) when it is at most 2% (and at least 16 bytes) larger, because it
-saves the display transfer of every unchanged band. It uses zlib level 1, the configuration the paper measured, unless
+saves the display transfer of every unchanged band. For each changed band it
+searches a shift within a motion range (by default 8 pixels across and
+`B − 1` lines): `dy` in the order 0, −1, +1, −2, +2, …, and for each, `dx` in
+the order 0, −s, +s, −2s, +2s, … up to the range, where `s` is 2 bytes for
+`rgb565*`, 3 for `rgb666`, `rgb888` and `rgb444` (two pixels), and 1 for
+the others; a range of `m` pixels is `2m`, `3m`, `3⌊m / 2⌋`, `m`, `⌊m / 2⌋`,
+`⌊m / 8⌋` and `m` bytes for `rgb565*`, `rgb666`/`rgb888`, `rgb444`,
+`gray8`, `gray4`, `mono` and `mono_vpage`. It keeps the first shift with the
+fewest nonzero residual bytes. It uses zlib level 1, the configuration the paper measured, unless
 told otherwise.
 
 **Tolerance** (encoder only; the format is unchanged). With a tolerance `T`
