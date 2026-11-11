@@ -28,6 +28,12 @@ everywhere.
 - `docs/RESULTS_V7.md`: on the paper's film windows, version 7 with one
   keyframe per second is 4.8–5.5× (W90) and 1.8–2.0× (W360) smaller than
   version 6. File sizes only; playback on hardware is not measured yet.
+- `contrib/ffmpeg`: the FFmpeg decoder, demuxer and muxer read and validate
+  partial deltas with shifted bands, and the encoder writes them
+  (`-band_lines`, `-motion_range`) and takes `-tolerance`, byte-identical to
+  `rv565.write` with the same options; checked against all 53 valid and 29
+  invalid conformance vectors and FATE. The Kaitai Struct description gains
+  the partial delta frame type and body.
 
 Version 2.0.0 of the C library reads RV565 format version 7
 (`docs/FORMAT.md`) and keeps reading version 6.

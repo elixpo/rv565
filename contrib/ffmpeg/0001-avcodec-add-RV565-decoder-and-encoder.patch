@@ -1,6 +1,6 @@
-From 139026bdbf7864d448a7d8f3258d6418e6115382 Mon Sep 17 00:00:00 2001
+From 8b2545bb7eb942c7d847b3c4f87776c74fd5738d Mon Sep 17 00:00:00 2001
 From: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
-Date: Thu, 12 Nov 2026 00:30:49 +0530
+Date: Thu, 12 Nov 2026 01:23:02 +0530
 Subject: [PATCH 1/2] avcodec: add RV565 decoder and encoder
 
 RV565 stores video for microcontroller displays as frames already in the
@@ -9,8 +9,12 @@ Version 7 of the format declares one of nine pixel formats (rgb565be,
 rgb565le, packed rgb444, rgb666, rgb888, gray8, gray4, mono and the
 page-ordered mono of SSD1306-class controllers), stores frames as they
 are or as zlib streams, and makes each frame a keyframe, the XOR of the
-frame with the previous one, or a repeat of it, with a keyframe at least
-every 1-255 frames.
+frame with the previous one, a repeat of it, or a partial delta, with a
+keyframe at least every 1-255 frames. A partial delta codes only the bands
+of lines that changed, each as a residual against the previous band
+shifted by a few bytes and lines, so a player decodes and sends only those
+bands to the display: on these boards the display bus, not the decoder,
+limits the frame rate.
 
 A packet is a frame record: a frame type byte and the body. Extradata
 carries the pixel format, codec and keyframe interval; without it the
@@ -18,15 +22,21 @@ stream is version 6 (rgb565be, zlib, keyframes only). The decoder keeps
 the previous frame in the stored layout, since deltas apply to those
 bytes, and outputs rgb565be, rgb565le, rgb444be, rgb24, gray or monob,
 losslessly for every stored format. It rejects bodies that do not
-decode to exactly one frame, and deltas or repeats without a reference.
+decode to exactly their expected size, malformed partial delta headers,
+and inter frames without a reference.
 
 The encoder stores the input pixel format as it is, or the format chosen
-with -format, and writes a repeat for an unchanged frame, otherwise the
-smaller of a keyframe and a delta, like the reference encoder; with the
-same zlib its output is byte-identical to the reference. -g sets the
-keyframe interval (default 1), -compressor stored|zlib the codec and
--compression_level the zlib level (default 1, the level the format's
-cost model was measured at).
+with -format. Like the reference encoder it writes a repeat for an
+unchanged frame, otherwise the smaller of a keyframe and a delta, or a
+partial delta when that is at most 2% (and at least 16 bytes) larger, with
+the same per-band shift search; with the same zlib its output is
+byte-identical to the reference. -g sets the keyframe interval (default
+1), -compressor stored|zlib the codec, -compression_level the zlib level
+(default 1, the level the format's cost model was measured at),
+-band_lines and -motion_range the partial deltas (default 8 lines and 8
+pixels, 0 disables them). -tolerance makes it lossy: a pixel of the
+previous frame, as decoded, is kept where every channel of the new pixel
+is within the tolerance, which turns noise into repeats and skipped bands.
 
 On the RV565 paper's Big Buck Bunny windows, one keyframe per second
 gives 1.10-1.28 MiB for a 90-frame window against 6.12 MiB with only
@@ -40,17 +50,17 @@ Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
 ---
  configure                 |   2 +
  doc/APIchanges            |   3 +
- doc/encoders.texi         |  56 ++++++
+ doc/encoders.texi         |  74 +++++
  doc/general_contents.texi |   2 +
  libavcodec/Makefile       |   2 +
  libavcodec/allcodecs.c    |   2 +
  libavcodec/codec_desc.c   |   7 +
  libavcodec/codec_id.h     |   1 +
- libavcodec/rv565.h        |  96 ++++++++++
- libavcodec/rv565dec.c     | 322 +++++++++++++++++++++++++++++++
- libavcodec/rv565enc.c     | 394 ++++++++++++++++++++++++++++++++++++++
+ libavcodec/rv565.h        | 203 ++++++++++++
+ libavcodec/rv565dec.c     | 408 +++++++++++++++++++++++
+ libavcodec/rv565enc.c     | 669 ++++++++++++++++++++++++++++++++++++++
  libavcodec/version.h      |   2 +-
- 12 files changed, 888 insertions(+), 1 deletion(-)
+ 12 files changed, 1374 insertions(+), 1 deletion(-)
  create mode 100644 libavcodec/rv565.h
  create mode 100644 libavcodec/rv565dec.c
  create mode 100644 libavcodec/rv565enc.c
@@ -83,10 +93,10 @@ index c729b61a44..fc857cc3f3 100644
    Add AV_PKT_FLAG_EOS.
  
 diff --git a/doc/encoders.texi b/doc/encoders.texi
-index d3487b40a5..8a22b0a26a 100644
+index d3487b40a5..746c757ad9 100644
 --- a/doc/encoders.texi
 +++ b/doc/encoders.texi
-@@ -5306,6 +5306,62 @@ Maximum encoded frame size for P frames in bytes. If this value is set as larger
+@@ -5306,6 +5306,80 @@ Maximum encoded frame size for P frames in bytes. If this value is set as larger
  than zero, then for P frames the value set by max_frame_size is ignored.
  @end table
  
@@ -97,7 +107,10 @@ index d3487b40a5..8a22b0a26a 100644
 +RV565 stores frames in the pixel format of a microcontroller display. Every
 +keyframe interval starts with a keyframe; any other frame is a repeat when it
 +equals the previous frame, otherwise the smaller of a keyframe and a delta
-+(the XOR of the frame with the previous one).
++(the XOR of the frame with the previous one), or a partial delta (the bands
++of lines that changed, each predicted from the previous frame shifted by a
++few pixels or lines, XOR a residual) when it is at most 2%, and at least 16
++bytes, larger: a player then sends only the changed bands to the display.
 +
 +@subsection Options
 +
@@ -144,6 +157,21 @@ index d3487b40a5..8a22b0a26a 100644
 +
 +@item compression_level @var{integer}
 +The zlib compression level, 0 to 9. Default value is 1.
++
++@item band_lines @var{integer}
++The band height of partial deltas, in lines: pixel rows, or pages of 8 rows
++for @samp{mono_vpage}. 0 disables partial deltas. Default value is 8.
++
++@item motion_range @var{integer}
++The range of the shift searched for each band of a partial delta, in pixels
++across; vertically the search covers the band height. 0 disables the search.
++Default value is 8.
++
++@item tolerance @var{integer}
++Keep a pixel of the previous frame, as the decoder shows it, where every
++channel of the new pixel, expanded to 8 bits, is within @var{tolerance} of
++it. Unchanged regions then become repeats and skipped bands. Default value is
++0, lossless.
 +@end table
 +
  @section snow
@@ -220,10 +248,10 @@ index 8c78bbce37..168a53ea3d 100644
      AV_CODEC_ID_FIRST_AUDIO = 0x10000,     ///< A dummy id pointing at the start of audio codecs
 diff --git a/libavcodec/rv565.h b/libavcodec/rv565.h
 new file mode 100644
-index 0000000000..f346abca83
+index 0000000000..11d2d475d9
 --- /dev/null
 +++ b/libavcodec/rv565.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,203 @@
 +/*
 + * RV565 common definitions
 + *
@@ -252,7 +280,9 @@ index 0000000000..f346abca83
 + * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
 + *
 + * A packet is one frame record without its length field: a frame type byte
-+ * (enum RV565FrameType) followed by the body. Extradata is
++ * (enum RV565FrameType) followed by the body. A partial delta body is the
++ * band height, the band mask, a shift per changed band and the coded
++ * residuals of the changed bands. Extradata is
 + * RV565_EXTRADATA_SIZE bytes, the pixel format, the codec and the keyframe
 + * interval, as at offsets 13-15 of a version 7 file header. Without
 + * extradata, a stream is version 6: RGB565 big-endian, zlib, keyframes only.
@@ -262,6 +292,9 @@ index 0000000000..f346abca83
 +#define AVCODEC_RV565_H
 +
 +#include <stdint.h>
++#include <string.h>
++
++#include "libavutil/common.h"
 +
 +#define RV565_EXTRADATA_SIZE 3
 +
@@ -288,6 +321,7 @@ index 0000000000..f346abca83
 +    RV565_FRAME_KEY,
 +    RV565_FRAME_DELTA,
 +    RV565_FRAME_REPEAT,
++    RV565_FRAME_PARTIAL,
 +    RV565_FRAME_NB,
 +};
 +
@@ -319,13 +353,114 @@ index 0000000000..f346abca83
 +    return ff_rv565_row_size(fmt, width) * height;
 +}
 +
++/**
++ * A frame as the lines that partial deltas divide into bands: pixel rows,
++ * or pages of 8 rows for RV565_PIX_MONO_VPAGE.
++ */
++static inline void ff_rv565_frame_lines(enum RV565PixelFormat fmt, int width, int height,
++                                        int *lines, int64_t *line_size)
++{
++    if (fmt == RV565_PIX_MONO_VPAGE) {
++        *lines     = (height + 7) >> 3;
++        *line_size = width;
++    } else {
++        *lines     = height;
++        *line_size = ff_rv565_row_size(fmt, width);
++    }
++}
++
++enum RV565PartialError {
++    RV565_PARTIAL_OK,
++    RV565_PARTIAL_BAND_HEIGHT,  ///< band height 0, or no body
++    RV565_PARTIAL_SHORT_MASK,   ///< the body ends inside the band mask
++    RV565_PARTIAL_NO_BAND,      ///< no band is set
++    RV565_PARTIAL_PAST_END,     ///< a band past the frame is set
++    RV565_PARTIAL_SHORT_SHIFTS, ///< the body ends inside the band shifts
++    RV565_PARTIAL_SHIFT_DY,     ///< a band is shifted by B lines or more
++};
++
++/**
++ * Parse the band height, band mask and band shifts at the start of a partial
++ * delta body.
++ *
++ * @param size        bytes available at body, at least up to the shifts
++ * @param header_size set to the size of these fields; the shifts of the
++ *                    changed bands, dx and dy signed bytes, end there
++ * @param data_size   set to the size of the changed bands together
++ * @return RV565_PARTIAL_OK or the rule the body breaks
++ */
++static inline enum RV565PartialError
++ff_rv565_parse_partial(const uint8_t *body, int64_t size, int lines, int64_t line_size,
++                       int *band_height, int *header_size, int64_t *data_size)
++{
++    int bands, mask_size, changed = 0;
++
++    if (size < 1 || !body[0])
++        return RV565_PARTIAL_BAND_HEIGHT;
++    *band_height = body[0];
++    bands        = (lines + *band_height - 1) / *band_height;
++    mask_size    = (bands + 7) >> 3;
++    if (size < 1 + mask_size)
++        return RV565_PARTIAL_SHORT_MASK;
++
++    *data_size = 0;
++    for (int b = 0; b < 8 * mask_size; b++) {
++        if (!(body[1 + (b >> 3)] >> (b & 7) & 1))
++            continue;
++        if (b >= bands)
++            return RV565_PARTIAL_PAST_END;
++        changed++;
++        *data_size += (FFMIN(lines, (b + 1) * *band_height) - b * *band_height) * line_size;
++    }
++    if (!changed)
++        return RV565_PARTIAL_NO_BAND;
++
++    *header_size = 1 + mask_size + 2 * changed;
++    if (size < *header_size)
++        return RV565_PARTIAL_SHORT_SHIFTS;
++    for (int i = 0; i < changed; i++) {
++        const int dy = (int8_t)body[1 + mask_size + 2 * i + 1];
++
++        if (FFABS(dy) >= *band_height)
++            return RV565_PARTIAL_SHIFT_DY;
++    }
++
++    return RV565_PARTIAL_OK;
++}
++
++/**
++ * Predict line y of a band of a partial delta: line y - dy of the band
++ * shifted right by dx bytes, zero where that falls outside the band or the
++ * line.
++ *
++ * @param band  the band of the previous frame, band_lines lines of line_size
++ */
++static inline void ff_rv565_predict_line(uint8_t *dst, const uint8_t *band, int band_lines,
++                                         int64_t line_size, int y, int dx, int dy)
++{
++    const int src = y - dy;
++
++    if (src < 0 || src >= band_lines || FFABS(dx) >= line_size) {
++        memset(dst, 0, line_size);
++        return;
++    }
++    band += src * line_size;
++    if (dx >= 0) {
++        memset(dst, 0, dx);
++        memcpy(dst + dx, band, line_size - dx);
++    } else {
++        memcpy(dst, band - dx, line_size + dx);
++        memset(dst + line_size + dx, 0, -dx);
++    }
++}
++
 +#endif /* AVCODEC_RV565_H */
 diff --git a/libavcodec/rv565dec.c b/libavcodec/rv565dec.c
 new file mode 100644
-index 0000000000..a6b6835fee
+index 0000000000..62f42fa24c
 --- /dev/null
 +++ b/libavcodec/rv565dec.c
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,408 @@
 +/*
 + * RV565 video decoder
 + *
@@ -354,7 +489,8 @@ index 0000000000..a6b6835fee
 + *
 + * Frames are stored in the pixel format of a microcontroller display, either
 + * as they are or as zlib streams. A keyframe holds the frame, a delta holds
-+ * the XOR of the frame with the previous one, and a repeat holds nothing.
++ * the XOR of the frame with the previous one, a partial delta holds that XOR
++ * for the bands of lines that changed, and a repeat holds nothing.
 + * Deltas apply to the frame bytes in the stored layout, so the decoder keeps
 + * the previous frame in that layout and converts it to the output pixel
 + * format afterwards.
@@ -378,6 +514,7 @@ index 0000000000..a6b6835fee
 +    size_t frame_size;
 +    uint8_t *frame;      ///< the current frame in the stored layout
 +    uint8_t *body;       ///< an inflated body
++    uint8_t *band;       ///< a band of the previous frame, for shifted bands
 +    /* Both buffers hold frame_size + 1 bytes, see inflate_body(). */
 +    int have_reference;
 +} RV565DecContext;
@@ -430,7 +567,8 @@ index 0000000000..a6b6835fee
 +    s->frame_size = frame_size;
 +    s->frame      = av_malloc(frame_size + 1);
 +    s->body       = av_malloc(frame_size + 1);
-+    if (!s->frame || !s->body)
++    s->band       = av_malloc(frame_size);
++    if (!s->frame || !s->body || !s->band)
 +        return AVERROR(ENOMEM);
 +
 +    if (s->codec == RV565_CODEC_ZLIB)
@@ -445,6 +583,7 @@ index 0000000000..a6b6835fee
 +
 +    av_freep(&s->frame);
 +    av_freep(&s->body);
++    av_freep(&s->band);
 +    ff_inflate_end(&s->zstream);
 +
 +    return 0;
@@ -458,17 +597,18 @@ index 0000000000..a6b6835fee
 +}
 +
 +/**
-+ * Inflate a zlib body to exactly frame_size bytes. The output buffer has one
-+ * byte more than that, so a stream that is too long is detected.
++ * Inflate zlib data to exactly size bytes (at most frame_size) into s->body.
++ * The buffer has one byte more than frame_size, so data that inflates to
++ * more than expected is detected.
 + */
-+static int inflate_body(AVCodecContext *avctx, const uint8_t *src, int size,
-+                        uint8_t *dst)
++static int inflate_body(AVCodecContext *avctx, const uint8_t *src, int src_size,
++                        size_t size)
 +{
 +    RV565DecContext *s = avctx->priv_data;
 +    z_stream *const zstream = &s->zstream.zstream;
 +    int zret;
 +
-+    if (size * 1032LL < s->frame_size) // Asymptotic max compression of deflate
++    if (src_size * 1032LL < size) // Asymptotic max compression of deflate
 +        return AVERROR_INVALIDDATA;
 +
 +    zret = inflateReset(zstream);
@@ -478,19 +618,101 @@ index 0000000000..a6b6835fee
 +    }
 +
 +    zstream->next_in   = src;
-+    zstream->avail_in  = size;
-+    zstream->next_out  = dst;
-+    zstream->avail_out = s->frame_size + 1;
++    zstream->avail_in  = src_size;
++    zstream->next_out  = s->body;
++    zstream->avail_out = size + 1;
 +
 +    zret = inflate(zstream, Z_FINISH);
 +    if (zret != Z_STREAM_END) {
 +        av_log(avctx, AV_LOG_ERROR, "Inflate failed with return code: %d.\n", zret);
 +        return AVERROR_INVALIDDATA;
 +    }
-+    if (zstream->total_out != s->frame_size) {
-+        av_log(avctx, AV_LOG_ERROR, "Frame inflates to %lu bytes instead of %zu.\n",
-+               zstream->total_out, s->frame_size);
++    if (zstream->total_out != size) {
++        av_log(avctx, AV_LOG_ERROR, "Data inflates to %lu bytes instead of %zu.\n",
++               zstream->total_out, size);
 +        return AVERROR_INVALIDDATA;
++    }
++
++    return 0;
++}
++
++/**
++ * Decode the data of a keyframe, delta or partial delta: size bytes, stored
++ * or zlib. Sets *data to the decoded bytes.
++ */
++static int decode_data(AVCodecContext *avctx, const uint8_t *src, int src_size,
++                       size_t size, const uint8_t **data)
++{
++    RV565DecContext *s = avctx->priv_data;
++    int ret;
++
++    if (s->codec == RV565_CODEC_ZLIB) {
++        if ((ret = inflate_body(avctx, src, src_size, size)) < 0)
++            return ret;
++        *data = s->body;
++    } else {
++        if (src_size != size) {
++            av_log(avctx, AV_LOG_ERROR, "Stored data has %d bytes instead of %zu.\n",
++                   src_size, size);
++            return AVERROR_INVALIDDATA;
++        }
++        *data = src;
++    }
++
++    return 0;
++}
++
++static int decode_partial(AVCodecContext *avctx, const uint8_t *body, int body_size)
++{
++    RV565DecContext *s = avctx->priv_data;
++    const uint8_t *data, *shift;
++    int lines, bands, band_height, header_size, ret;
++    int64_t line_size, data_size;
++
++    ff_rv565_frame_lines(s->format, avctx->width, avctx->height, &lines, &line_size);
++    if (ff_rv565_parse_partial(body, body_size, lines, line_size,
++                               &band_height, &header_size, &data_size) != RV565_PARTIAL_OK) {
++        av_log(avctx, AV_LOG_ERROR, "Invalid partial delta header.\n");
++        return AVERROR_INVALIDDATA;
++    }
++
++    ret = decode_data(avctx, body + header_size, body_size - header_size,
++                      data_size, &data);
++    if (ret < 0)
++        return ret;
++
++    /* Each changed band is its prediction from the previous frame XOR its
++     * residual; the residuals are concatenated in data. */
++    bands = (lines + band_height - 1) / band_height;
++    shift = body + 1 + ((bands + 7) >> 3);
++    for (int b = 0; b < bands; b++) {
++        const int first = b * band_height;
++        const int count = FFMIN(lines, first + band_height) - first;
++        uint8_t *dst = s->frame + first * line_size;
++        const size_t size = count * line_size;
++        int dx, dy;
++
++        if (!(body[1 + (b >> 3)] >> (b & 7) & 1))
++            continue;
++        dx = (int8_t)shift[0];
++        dy = (int8_t)shift[1];
++        if (!dx && !dy) {
++            for (size_t i = 0; i < size; i++)
++                dst[i] ^= data[i];
++        } else {
++            /* The prediction reads the previous band, so keep a copy. */
++            memcpy(s->band, dst, size);
++            for (int y = 0; y < count; y++) {
++                ff_rv565_predict_line(dst, s->band, count, line_size, y, dx, dy);
++                for (int64_t j = 0; j < line_size; j++)
++                    dst[j] ^= data[j];
++                dst  += line_size;
++                data += line_size;
++            }
++            data -= size;
++        }
++        data  += size;
++        shift += 2;
 +    }
 +
 +    return 0;
@@ -571,35 +793,34 @@ index 0000000000..a6b6835fee
 +
 +    switch (type) {
 +    case RV565_FRAME_KEY:
-+    case RV565_FRAME_DELTA: {
-+        const uint8_t *src = body;
++    case RV565_FRAME_DELTA:
++    case RV565_FRAME_PARTIAL: {
++        const uint8_t *data;
 +
-+        if (type == RV565_FRAME_DELTA && !s->have_reference) {
++        if (type != RV565_FRAME_KEY && !s->have_reference) {
 +            av_log(avctx, AV_LOG_ERROR, "Delta frame without a reference frame.\n");
 +            return AVERROR_INVALIDDATA;
 +        }
 +        /* Whatever follows depends on this frame. */
 +        s->have_reference = 0;
 +
-+        if (s->codec == RV565_CODEC_ZLIB) {
-+            ret = inflate_body(avctx, body, body_size, s->body);
++        if (type == RV565_FRAME_PARTIAL) {
++            ret = decode_partial(avctx, body, body_size);
 +            if (ret < 0)
 +                return ret;
-+            src = s->body;
-+        } else if (body_size != s->frame_size) {
-+            av_log(avctx, AV_LOG_ERROR, "Stored frame has %d bytes instead of %zu.\n",
-+                   body_size, s->frame_size);
-+            return AVERROR_INVALIDDATA;
-+        }
-+
-+        if (type == RV565_FRAME_KEY) {
-+            if (src == s->body)
-+                FFSWAP(uint8_t *, s->frame, s->body);
-+            else
-+                memcpy(s->frame, src, s->frame_size);
 +        } else {
-+            for (size_t i = 0; i < s->frame_size; i++)
-+                s->frame[i] ^= src[i];
++            ret = decode_data(avctx, body, body_size, s->frame_size, &data);
++            if (ret < 0)
++                return ret;
++            if (type == RV565_FRAME_KEY) {
++                if (data == s->body)
++                    FFSWAP(uint8_t *, s->frame, s->body);
++                else
++                    memcpy(s->frame, data, s->frame_size);
++            } else {
++                for (size_t i = 0; i < s->frame_size; i++)
++                    s->frame[i] ^= data[i];
++            }
 +        }
 +        s->have_reference = 1;
 +        break;
@@ -650,10 +871,10 @@ index 0000000000..a6b6835fee
 +};
 diff --git a/libavcodec/rv565enc.c b/libavcodec/rv565enc.c
 new file mode 100644
-index 0000000000..90c9aa01ae
+index 0000000000..fd6730dc52
 --- /dev/null
 +++ b/libavcodec/rv565enc.c
-@@ -0,0 +1,394 @@
+@@ -0,0 +1,669 @@
 +/*
 + * RV565 video encoder
 + *
@@ -682,11 +903,15 @@ index 0000000000..90c9aa01ae
 + *
 + * Every keyframe interval starts with a keyframe. Any other frame is a repeat
 + * when it equals the previous frame, otherwise the smaller of a keyframe and
-+ * a delta (the XOR with the previous frame), as in the reference encoder.
++ * a delta (the XOR with the previous frame), or a partial delta (the XOR of
++ * the bands of lines that changed) when it is not much larger, as in the
++ * reference encoder. A tolerance makes the encoder lossy: it keeps pixels of
++ * the previous frame that are close enough to the new ones.
 + * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
 + */
 +
 +#include "libavutil/common.h"
++#include "libavutil/intreadwrite.h"
 +#include "libavutil/imgutils.h"
 +#include "libavutil/mem.h"
 +#include "libavutil/opt.h"
@@ -706,12 +931,20 @@ index 0000000000..90c9aa01ae
 +    int format;             ///< enum RV565PixelFormat, or -1 for auto
 +    int codec;              ///< enum RV565Codec
 +    int keyframe_interval;
++    int band_lines;         ///< band height of partial deltas, 0 for none
++    int motion_range;       ///< shift search range of partial deltas, in pixels
++    int tolerance;
++    int dx_step, max_dx, max_dy; ///< the shift search, in bytes and lines
++    uint8_t *line;          ///< the prediction of one line
++    int lines;              ///< lines of a frame, see ff_rv565_frame_lines()
++    int64_t line_size;
 +    size_t frame_size;
 +    size_t bound;           ///< worst-case size of an encoded body
 +    uint8_t *frame;         ///< the current frame in the stored layout
 +    uint8_t *previous;      ///< the previous frame in the stored layout
 +    uint8_t *delta;         ///< frame XOR previous
 +    uint8_t *key_body, *delta_body;
++    uint8_t *partial_body;  ///< band height, band mask, coded bands
 +    int64_t frame_number;
 +} RV565EncContext;
 +
@@ -785,6 +1018,8 @@ index 0000000000..90c9aa01ae
 +    if (!s->frame || !s->previous || !s->delta)
 +        return AVERROR(ENOMEM);
 +
++    ff_rv565_frame_lines(s->format, avctx->width, avctx->height, &s->lines, &s->line_size);
++
 +    if (s->codec == RV565_CODEC_ZLIB) {
 +        ret = ff_deflate_init(&s->zstream,
 +                              avctx->compression_level == FF_COMPRESSION_DEFAULT ?
@@ -799,6 +1034,33 @@ index 0000000000..90c9aa01ae
 +            return AVERROR(ENOMEM);
 +    }
 +
++    if (s->band_lines) {
++        const int bands = (s->lines + s->band_lines - 1) / s->band_lines;
++
++        const int m = s->motion_range;
++
++        s->partial_body = av_malloc(1 + ((bands + 7) >> 3) + 2 * bands +
++                                    FFMAX(s->bound, s->frame_size));
++        s->line         = av_malloc(s->line_size);
++        if (!s->partial_body || !s->line)
++            return AVERROR(ENOMEM);
++
++        /* The horizontal search moves whole pixels, or for rgb444 pairs of
++         * pixels, as in the reference encoder. */
++        switch (s->format) {
++        case RV565_PIX_RGB565BE:
++        case RV565_PIX_RGB565LE: s->dx_step = 2; s->max_dx = 2 * m;       break;
++        case RV565_PIX_RGB666:
++        case RV565_PIX_RGB888:   s->dx_step = 3; s->max_dx = 3 * m;       break;
++        case RV565_PIX_RGB444:   s->dx_step = 3; s->max_dx = 3 * (m / 2); break;
++        case RV565_PIX_GRAY4:    s->dx_step = 1; s->max_dx = m / 2;       break;
++        case RV565_PIX_MONO:     s->dx_step = 1; s->max_dx = m / 8;       break;
++        default:                 s->dx_step = 1; s->max_dx = m;           break;
++        }
++        s->max_dx = FFMIN(s->max_dx, 127 - 127 % s->dx_step);
++        s->max_dy = m ? FFMIN(s->band_lines - 1, 127) : 0;
++    }
++
 +    return 0;
 +}
 +
@@ -811,6 +1073,8 @@ index 0000000000..90c9aa01ae
 +    av_freep(&s->delta);
 +    av_freep(&s->key_body);
 +    av_freep(&s->delta_body);
++    av_freep(&s->partial_body);
++    av_freep(&s->line);
 +    ff_deflate_end(&s->zstream);
 +
 +    return 0;
@@ -877,7 +1141,7 @@ index 0000000000..90c9aa01ae
 +    }
 +}
 +
-+static int deflate_body(AVCodecContext *avctx, const uint8_t *src,
++static int deflate_body(AVCodecContext *avctx, const uint8_t *src, size_t src_size,
 +                        uint8_t *dst, size_t *size)
 +{
 +    RV565EncContext *s = avctx->priv_data;
@@ -891,7 +1155,7 @@ index 0000000000..90c9aa01ae
 +    }
 +
 +    zstream->next_in   = src;
-+    zstream->avail_in  = s->frame_size;
++    zstream->avail_in  = src_size;
 +    zstream->next_out  = dst;
 +    zstream->avail_out = s->bound;
 +
@@ -905,46 +1169,272 @@ index 0000000000..90c9aa01ae
 +    return 0;
 +}
 +
++/* The channels of pixel (x, y), each expanded to 8 bits as the reference
++ * encoder's to_rgb888() does; gray and mono pixels have one channel. */
++static int pixel_channels(const RV565EncContext *s, const uint8_t *frame,
++                          int width, int x, int y, int c[3])
++{
++    const uint8_t *row = frame + y * s->line_size;
++    int v;
++
++    switch (s->format) {
++    case RV565_PIX_RGB565BE:
++    case RV565_PIX_RGB565LE:
++        v = s->format == RV565_PIX_RGB565BE ? AV_RB16(row + 2 * x) : AV_RL16(row + 2 * x);
++        c[0] = ((v >> 11)        * 255 + 15) / 31;
++        c[1] = ((v >> 5 & 0x3f)  * 255 + 31) / 63;
++        c[2] = ((v & 0x1f)       * 255 + 15) / 31;
++        return 3;
++    case RV565_PIX_RGB444:
++        for (int i = 0; i < 3; i++) {
++            const int n = 3 * x + i;
++            c[i] = (row[n >> 1] >> (n & 1 ? 0 : 4) & 0x0f) * 17;
++        }
++        return 3;
++    case RV565_PIX_RGB666:
++        for (int i = 0; i < 3; i++)
++            c[i] = ((row[3 * x + i] >> 2) * 255 + 31) / 63;
++        return 3;
++    case RV565_PIX_RGB888:
++        for (int i = 0; i < 3; i++)
++            c[i] = row[3 * x + i];
++        return 3;
++    case RV565_PIX_GRAY8:
++        c[0] = row[x];
++        return 1;
++    case RV565_PIX_GRAY4:
++        c[0] = (row[x >> 1] >> (x & 1 ? 0 : 4) & 0x0f) * 17;
++        return 1;
++    case RV565_PIX_MONO:
++        c[0] = row[x >> 3] >> (7 - (x & 7)) & 1 ? 255 : 0;
++        return 1;
++    default: /* RV565_PIX_MONO_VPAGE */
++        c[0] = frame[(y >> 3) * width + x] >> (y & 7) & 1 ? 255 : 0;
++        return 1;
++    }
++}
++
++static void copy_bits(uint8_t *dst, const uint8_t *src, int mask)
++{
++    *dst = (*dst & ~mask) | (*src & mask);
++}
++
++/* Copy the bits of pixel (x, y) from src to dst. */
++static void copy_pixel(const RV565EncContext *s, uint8_t *dst, const uint8_t *src,
++                       int width, int x, int y)
++{
++    const size_t row = y * s->line_size;
++
++    switch (s->format) {
++    case RV565_PIX_RGB565BE:
++    case RV565_PIX_RGB565LE:
++        memcpy(dst + row + 2 * x, src + row + 2 * x, 2);
++        break;
++    case RV565_PIX_RGB444:
++        for (int n = 3 * x; n < 3 * x + 3; n++)
++            copy_bits(dst + row + (n >> 1), src + row + (n >> 1), n & 1 ? 0x0f : 0xf0);
++        break;
++    case RV565_PIX_RGB666:
++    case RV565_PIX_RGB888:
++        memcpy(dst + row + 3 * x, src + row + 3 * x, 3);
++        break;
++    case RV565_PIX_GRAY8:
++        dst[row + x] = src[row + x];
++        break;
++    case RV565_PIX_GRAY4:
++        copy_bits(dst + row + (x >> 1), src + row + (x >> 1), x & 1 ? 0x0f : 0xf0);
++        break;
++    case RV565_PIX_MONO:
++        copy_bits(dst + row + (x >> 3), src + row + (x >> 3), 0x80 >> (x & 7));
++        break;
++    default: /* RV565_PIX_MONO_VPAGE */
++        copy_bits(dst + (y >> 3) * width + x, src + (y >> 3) * width + x, 1 << (y & 7));
++        break;
++    }
++}
++
++/* Conditional replenishment: keep each pixel of the previous frame, as the
++ * decoder shows it, where every channel of the new pixel is within the
++ * tolerance of it. */
++static void apply_tolerance(AVCodecContext *avctx)
++{
++    RV565EncContext *s = avctx->priv_data;
++    const int width = avctx->width;
++
++    for (int y = 0; y < avctx->height; y++) {
++        for (int x = 0; x < width; x++) {
++            int a[3], b[3], keep = 1;
++            const int n = pixel_channels(s, s->frame, width, x, y, a);
++
++            pixel_channels(s, s->previous, width, x, y, b);
++            for (int i = 0; i < n; i++)
++                keep &= FFABS(a[i] - b[i]) <= s->tolerance;
++            if (keep)
++                copy_pixel(s, s->frame, s->previous, width, x, y);
++        }
++    }
++}
++
++/* Encode the data of a keyframe, delta or partial delta. */
++static int encode_data(AVCodecContext *avctx, const uint8_t *src, size_t src_size,
++                       uint8_t *dst, size_t *size)
++{
++    RV565EncContext *s = avctx->priv_data;
++
++    if (s->codec == RV565_CODEC_ZLIB)
++        return deflate_body(avctx, src, src_size, dst, size);
++
++    memcpy(dst, src, src_size);
++    *size = src_size;
++    return 0;
++}
++
++/* Bytes of the residual of a band for the shift (dx, dy) that are not zero,
++ * counting no further than limit. */
++static int64_t band_cost(RV565EncContext *s, const uint8_t *cur, const uint8_t *prev,
++                         int count, int dx, int dy, int64_t limit)
++{
++    int64_t cost = 0;
++
++    for (int y = 0; y < count && cost < limit; y++) {
++        const uint8_t *line = cur + y * s->line_size;
++
++        ff_rv565_predict_line(s->line, prev, count, s->line_size, y, dx, dy);
++        for (int64_t j = 0; j < s->line_size; j++)
++            cost += line[j] != s->line[j];
++    }
++
++    return cost;
++}
++
++/* The shift search of the reference encoder: dy in the order 0, -1, +1, -2,
++ * +2, ..., and for each dx in the order 0, -step, +step, ..., keeping the
++ * first shift with the fewest nonzero residual bytes. */
++static void search_shift(RV565EncContext *s, const uint8_t *cur, const uint8_t *prev,
++                         int count, int *best_dx, int *best_dy)
++{
++    const int max_dy = FFMIN(s->max_dy, count - 1);
++    int64_t best = band_cost(s, cur, prev, count, 0, 0, INT64_MAX);
++
++    *best_dx = *best_dy = 0;
++    for (int i = 0; i <= 2 * max_dy && best; i++) {
++        const int dy = i & 1 ? -(i + 1) / 2 : i / 2;
++
++        for (int k = 0; k <= 2 * (s->max_dx / s->dx_step) && best; k++) {
++            const int dx = (k & 1 ? -(k + 1) / 2 : k / 2) * s->dx_step;
++            int64_t cost;
++
++            if (!dx && !dy)
++                continue;
++            cost = band_cost(s, cur, prev, count, dx, dy, best);
++            if (cost < best) {
++                best     = cost;
++                *best_dx = dx;
++                *best_dy = dy;
++            }
++        }
++    }
++}
++
++/* A partial delta of the bands of band_lines lines that changed. */
++static int encode_partial(AVCodecContext *avctx, size_t *size)
++{
++    RV565EncContext *s = avctx->priv_data;
++    const int bands = (s->lines + s->band_lines - 1) / s->band_lines;
++    const int mask_size = (bands + 7) >> 3;
++    uint8_t *mask = s->partial_body + 1, *shift = mask + mask_size;
++    size_t data_size = 0, coded_size;
++    int ret;
++
++    s->partial_body[0] = s->band_lines;
++    memset(mask, 0, mask_size);
++    for (int b = 0; b < bands; b++) {
++        const int first = b * s->band_lines;
++        const int count = FFMIN(s->lines, first + s->band_lines) - first;
++        const size_t offset = first * s->line_size;
++        const size_t band_size = count * s->line_size;
++        const uint8_t *cur = s->frame + offset, *prev = s->previous + offset;
++        uint8_t *dst = s->delta + data_size;
++        int dx, dy;
++
++        if (!memcmp(cur, prev, band_size))
++            continue;
++        mask[b >> 3] |= 1 << (b & 7);
++        search_shift(s, cur, prev, count, &dx, &dy);
++        *shift++ = dx;
++        *shift++ = dy;
++        for (int y = 0; y < count; y++) {
++            ff_rv565_predict_line(s->line, prev, count, s->line_size, y, dx, dy);
++            for (int64_t j = 0; j < s->line_size; j++)
++                dst[j] = cur[y * s->line_size + j] ^ s->line[j];
++            dst += s->line_size;
++        }
++        data_size += band_size;
++    }
++
++    ret = encode_data(avctx, s->delta, data_size, shift, &coded_size);
++    if (ret < 0)
++        return ret;
++    *size = shift - s->partial_body + coded_size;
++
++    return 0;
++}
++
 +static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 +                        const AVFrame *pict, int *got_packet)
 +{
 +    RV565EncContext *s = avctx->priv_data;
++    const int keyframe = !(s->frame_number % s->keyframe_interval);
 +    enum RV565FrameType type = RV565_FRAME_KEY;
-+    const uint8_t *body;
-+    size_t body_size;
++    const uint8_t *body = NULL;
++    size_t body_size = 0;
 +    int ret;
 +
 +    convert_frame(avctx, pict);
++    if (s->tolerance && s->frame_number)
++        apply_tolerance(avctx);
 +
-+    if (s->frame_number % s->keyframe_interval &&
-+        !memcmp(s->frame, s->previous, s->frame_size))
++    if (!keyframe && !memcmp(s->frame, s->previous, s->frame_size)) {
 +        type = RV565_FRAME_REPEAT;
-+
-+    if (type == RV565_FRAME_REPEAT) {
-+        body      = NULL;
-+        body_size = 0;
 +    } else if (s->codec == RV565_CODEC_STORED) {
-+        /* A stored delta is never smaller than the frame. */
 +        body      = s->frame;
 +        body_size = s->frame_size;
 +    } else {
-+        ret = deflate_body(avctx, s->frame, s->key_body, &body_size);
++        ret = deflate_body(avctx, s->frame, s->frame_size, s->key_body, &body_size);
 +        if (ret < 0)
 +            return ret;
 +        body = s->key_body;
++    }
 +
-+        if (s->frame_number % s->keyframe_interval) {
++    if (!keyframe && type != RV565_FRAME_REPEAT) {
++        /* The smallest of a keyframe and a delta (a stored delta is never
++         * smaller than the frame), unless a partial delta is at most 2%,
++         * and at least 16 bytes, larger: it also saves the display transfer
++         * of every unchanged band. */
++        if (s->codec == RV565_CODEC_ZLIB) {
 +            size_t delta_size;
 +
 +            for (size_t i = 0; i < s->frame_size; i++)
 +                s->delta[i] = s->frame[i] ^ s->previous[i];
-+            ret = deflate_body(avctx, s->delta, s->delta_body, &delta_size);
++            ret = deflate_body(avctx, s->delta, s->frame_size, s->delta_body, &delta_size);
 +            if (ret < 0)
 +                return ret;
-+            if (delta_size < body_size) {
++            if (delta_size <= body_size) {
 +                type      = RV565_FRAME_DELTA;
 +                body      = s->delta_body;
 +                body_size = delta_size;
++            }
++        }
++        if (s->band_lines) {
++            size_t partial_size;
++
++            ret = encode_partial(avctx, &partial_size);
++            if (ret < 0)
++                return ret;
++            if (partial_size <= body_size + FFMAX(16, body_size / 50)) {
++                type      = RV565_FRAME_PARTIAL;
++                body      = s->partial_body;
++                body_size = partial_size;
 +            }
 +        }
 +    }
@@ -998,6 +1488,12 @@ index 0000000000..90c9aa01ae
 +          { .i64 = RV565_CODEC_STORED }, 0, 0, VE, .unit = "compressor" },
 +        { "zlib",   "zlib streams", 0, AV_OPT_TYPE_CONST,
 +          { .i64 = RV565_CODEC_ZLIB },   0, 0, VE, .unit = "compressor" },
++    { "band_lines", "band height of partial deltas in lines (pixel rows, or pages of 8 rows), 0 for none",
++      OFFSET(band_lines), AV_OPT_TYPE_INT, { .i64 = 8 }, 0, 255, VE },
++    { "motion_range", "shift search range of partial delta bands, in pixels, 0 for none",
++      OFFSET(motion_range), AV_OPT_TYPE_INT, { .i64 = 8 }, 0, 127, VE },
++    { "tolerance", "keep a pixel of the previous frame where every 8-bit channel is within this, 0 for lossless",
++      OFFSET(tolerance), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 255, VE },
 +    { NULL },
 +};
 +
