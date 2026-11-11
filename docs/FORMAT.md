@@ -1,8 +1,18 @@
-# RV565 container format, version 6
+# RV565 container format, version 7
 
-RV565 stores video as independently compressed frames whose decoded bytes are
-already in the native pixel format of RGB565 SPI panels. Any frame can be
-decoded on its own, so seeking is O(1) and a damaged frame cannot affect others.
+RV565 stores video for microcontrollers as frames whose decoded bytes are
+already in the native pixel format of the display, so a player only
+decompresses and transfers: no colour conversion runs on the device.
+
+Version 7 makes the format general. The header declares one of nine pixel
+formats, from RGB565 and RGB888 for colour TFTs to 4-bit grayscale and 1-bit
+monochrome for OLED, e-paper and memory LCDs, and one of two codecs (stored or
+zlib). Frames are keyframes, XOR differences from the previous frame, or
+repeats of it, and a keyframe interval in the header keeps seeking O(1).
+
+Version 7 readers also read version 6 files (see
+[Version 6](#version-6)), which are the special case RGB565 big-endian, zlib,
+every frame a keyframe.
 
 ## Identification
 
@@ -10,77 +20,177 @@ decoded on its own, so seeking is O(1) and a damaged frame cannot affect others.
 | --- | --- |
 | Extension | `.rv565` |
 | MIME type | `video/x-rv565` |
-| Signature | `RV5` at offset 0, version `6` at offset 3, a frame rate of 1–30 at offset 8, and a zlib header at offset 16 |
+| Signature | `RV5` at offset 0, version `6` or `7` at offset 3, a frame rate at offset 8 (1–30 in version 6, 1–60 in version 7) |
 
-The zlib header byte at offset 16 is `0x78` in practice: the reference
-encoders use the default 32 KiB window. RFC 1950 also allows smaller windows
-(CM 8, CINFO 0–7, so `0x08`–`0x78` in steps of `0x10`), and readers must
-accept them; signatures that match only `0x78` identify every file the
-reference encoders write.
+Signatures for `file(1)`, shared-mime-info, PRONOM and Kaitai Struct are in
+`contrib/`.
 
-Signatures for `file(1)`, shared-mime-info and PRONOM are in `contrib/`.
-
-## Layout
+## Header
 
 All multi-byte integers are little-endian.
 
 | Offset | Size | Field | Constraint |
 | --- | --- | --- | --- |
 | 0 | 3 | Magic | ASCII `RV5` |
-| 3 | 1 | Version | `6` |
+| 3 | 1 | Version | `7` |
 | 4 | 2 | Width `w` | ≥ 1 |
 | 6 | 2 | Height `h` | ≥ 1 |
-| 8 | 1 | Frames per second | 1–30 |
-| 9 | 1 | Flags | `0`; readers must ignore unknown bits |
+| 8 | 1 | Frames per second | 1–60 |
+| 9 | 1 | Flags | none defined; writers write 0, readers ignore unknown bits |
 | 10 | 2 | Frame count `n` | ≥ 1 |
-| 12 | … | `n` frame records | see below |
+| 12 | 1 | Header size `H` | ≥ 16 |
+| 13 | 1 | Pixel format | 0–8, see [Pixel formats](#pixel-formats) |
+| 14 | 1 | Codec | 0–1, see [Codecs](#codecs) |
+| 15 | 1 | Keyframe interval `K` | ≥ 1 |
+| 16 | `H` − 16 | Extension | readers skip it; writers of this version write `H` = 16 |
 
-Each frame record is a 32-bit compressed length `L` (≥ 1) followed by `L` bytes
-of a zlib stream (RFC 1950 wrapping RFC 1951 Deflate). Records are contiguous;
-the file ends exactly after the last record.
+The fields at offsets 0–11 are where version 6 has them, so tools that print
+the size, rate and frame count of a version 6 file can do the same for
+version 7. `H` lets a later minor revision append header fields without
+breaking version 7 readers. Unknown pixel formats, codecs and frame types
+cannot be skipped safely, so readers reject them.
 
-## Decoded frame
+## Frame records
 
-A payload must inflate to exactly `2 * w * h` bytes: `h` rows of `w` pixels,
-row-major, top to bottom. Each pixel is 16-bit RGB565,
+`n` records follow the header, starting at offset `H`, contiguous, and the
+file ends exactly after the last one. Each record is:
 
-    p = (r5 << 11) | (g6 << 5) | b5
+| Size | Field |
+| --- | --- |
+| 4 | Record length `L` (≥ 1): the bytes that follow, type included |
+| 1 | Frame type `T` |
+| `L` − 1 | Body |
 
-stored **big-endian** (high byte first), the byte order ST7789-class panels
-expect on SPI. A decoder must reject a payload that inflates to any other
-length.
+| `T` | Name | Body | Decoded frame `F[i]` |
+| --- | --- | --- | --- |
+| 0 | Keyframe | the frame, encoded with the codec | the decoded body |
+| 1 | Delta | `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1] XOR` the decoded body |
+| 2 | Repeat | empty (`L` = 1) | `F[i−1]` |
 
-## Reader validation
+Other types are reserved; readers reject them.
+
+**Keyframe interval.** Every frame `i` with `i mod K = 0` must be a
+keyframe, frame 0 included. Encoders may make other frames keyframes too. A
+reader seeking to frame `i` can therefore start at keyframe `i − (i mod K)`
+and apply at most `K − 1` records, without scanning the file. `K` = 1 makes
+every frame a keyframe, as in version 6.
+
+**Delta and repeat** frames are exact: XOR is applied to the frame's encoded
+bytes, so the result is bit-identical to the source frame in its pixel
+format, padding bits included.
+
+## Codecs
+
+| Value | Codec | Body of a keyframe or delta |
+| --- | --- | --- |
+| 0 | Stored | the frame bytes as they are; length exactly `S` |
+| 1 | zlib | a zlib stream (RFC 1950 wrapping RFC 1951 Deflate) that inflates to exactly `S` bytes |
+
+`S` is the frame size from the pixel format table. Values 2–255 are reserved
+(2 is set aside for LZ4); readers reject them.
+
+Stored suits displays whose bus is fast and whose CPU is slow, and clips that
+are mostly repeats; zlib is what the RV565 paper measured, and on the ESP32
+family its inflater is in ROM.
+
+## Pixel formats
+
+A frame is `h` rows, top to bottom, each `R` bytes, so `S = R × h`, except
+format 8. Unused low-order bits at the end of a row are zero.
+
+| Value | Name | Row bytes `R` | Layout | Typical displays |
+| --- | --- | --- | --- | --- |
+| 0 | `rgb565be` | `2w` | 16-bit `(r5 << 11) \| (g6 << 5) \| b5`, high byte first | ST7789, ST7735, ILI9341, GC9A01 on SPI |
+| 1 | `rgb565le` | `2w` | the same value, low byte first | RGB parallel and MIPI panels, frame buffers in memory, LVGL with `LV_COLOR_16_SWAP` 0 |
+| 2 | `rgb444` | `⌈3w / 2⌉` | 12-bit pixels packed high nibble first: `R0G0 B0R1 G1B1` | ST7789/ST7735 12-bit mode (COLMOD 0x03) |
+| 3 | `rgb666` | `3w` | bytes R, G, B, each channel in the high 6 bits | ILI9341, ILI9488, ST7796 18-bit mode over SPI |
+| 4 | `rgb888` | `3w` | bytes R, G, B | 24-bit panels, host tools |
+| 5 | `gray8` | `w` | one byte per pixel, 0 black, 255 white | grayscale displays, intermediate buffers |
+| 6 | `gray4` | `⌈w / 2⌉` | two pixels per byte, high nibble first, 0 black, 15 white | SSD1322, SSD1327, SSD1362 OLEDs |
+| 7 | `mono` | `⌈w / 8⌉` | one bit per pixel, most significant bit first, 1 lit (white) | e-paper, Sharp memory LCDs, ST7920 |
+| 8 | `mono_vpage` | — | pages of 8 rows, top to bottom; each page is `w` bytes left to right; bit `k` (least significant first) of a byte is row `8p + k`. `S = w × ⌈h / 8⌉` | SSD1306, SH1106, ST7567 |
+
+Displays whose 1-bit convention is "1 is black" invert on the device, or the
+encoder inverts the image; the format itself always means 1 lit.
+
+## Validation
 
 A conforming reader rejects a file when any of these hold:
 
-- the magic or version differs;
-- width or height is 0, the rate is outside 1–30, or the frame count is 0;
-- a length field is 0 or runs past the end of the data;
-- bytes remain after the last frame record;
-- a payload does not inflate to exactly `2 * w * h` bytes.
+- the magic differs, or the version is not 6 or 7;
+- width, height or frame count is 0, or the rate is out of range;
+- in version 7: `H` < 16, or the pixel format, codec or a frame type is
+  reserved, or `K` = 0;
+- a record length is 0 or runs past the end of the data, or bytes remain
+  after the last record;
+- a frame `i` with `i mod K = 0` is not a keyframe;
+- a repeat record has a body, or a stored keyframe or delta body is not
+  exactly `S` bytes;
+- a zlib body does not inflate to exactly `S` bytes.
 
-Readers may also reject dimensions larger than their panel.
+All but the last are checked when the file is opened, by one linear scan of
+the record lengths that also builds the frame index. Readers may also reject
+dimensions or formats their display does not support.
+
+## Decoding
+
+A player decoding frames in order keeps the previous frame, which it already
+has for the display. Keyframes decode on their own; a delta decodes into the
+frame buffer and is then XORed with the previous frame (or, in place, decodes
+to a scratch buffer of `S` bytes and is XORed into the previous frame); a
+repeat costs nothing and need not be sent to the display again.
+
+To seek to frame `i`, decode keyframe `k = i − (i mod K)`, then apply records
+`k + 1` … `i`.
 
 ## Indexing and decode cost
 
-One linear scan of the length fields gives every frame's offset, after which
-lookup is O(1). Because frames share no state, inflate time depends only on
-the payload: the RV565 paper (arXiv:2610.35935) measured it as linear in `L`
-on the ESP32-S3, so a reader can predict from the length table alone whether a
-clip will play at its rate before decoding anything.
+One linear scan of the record lengths gives every record's offset, after
+which lookup is O(1). Inflate time depends only on the body: the RV565 paper
+(arXiv:2610.35935) measured it as linear in `L` on the ESP32-S3, so a reader
+can predict from the length table alone whether a clip will play at its rate
+before decoding anything. A delta adds one pass of XOR over `S` bytes.
 
 ## Writing
 
-Encoders choose the zlib level; `tools/rv565.py encode` uses level 1, the
-configuration measured in the paper. Frames should be resampled and converted
-to RGB565 on the host so the device only inflates, scales and transfers.
+The reference encoder (`rv565 encode`, the `rv565` Python package) converts
+and resamples on the host, so the device only decodes and transfers. With
+`K` > 1 it writes a repeat when a frame equals the previous one, and otherwise
+the smaller of a delta and a keyframe. It uses zlib level 1, the
+configuration the paper measured, unless told otherwise.
 
-## Test vector
+Colour conversion from 8-bit RGB, used by every reference encoder so that
+they produce identical frames:
 
-`tests/data/testpattern.rv565` (24 frames of scrolling colour bars, 180×135,
-24 FPS, 6,322 bytes) has SHA-256
+| Format | From `(r, g, b)` |
+| --- | --- |
+| `rgb565*` | `r5 = r >> 3`, `g6 = g >> 2`, `b5 = b >> 3` |
+| `rgb444` | `r >> 4`, `g >> 4`, `b >> 4` |
+| `rgb666` | `r & 0xFC`, `g & 0xFC`, `b & 0xFC` |
+| `gray8` | `Y = (299r + 587g + 114b + 500) // 1000` |
+| `gray4` | `Y >> 4` |
+| `mono`, `mono_vpage` | 1 when `Y` ≥ 128 |
+
+## Version 6
+
+Version 6 is the format of RV565 1.x. Its header is the first 12 bytes above
+with version `6` and a rate of 1–30; records start at offset 12 and are a
+32-bit length followed by a zlib stream, with no type byte. A version 7
+reader treats it as `H` = 12, pixel format 0, codec 1, `K` = 1, every record
+a keyframe. Writers can still produce it for players that predate 2.0.
+
+## Conformance vectors
+
+`tests/data/v7/` holds one file per pixel format and codec, clips with
+deltas and repeats, the version 6 test pattern, and invalid files.
+`tests/data/v7/manifest.json` lists, for every valid file, its header fields
+and the SHA-256 of each decoded frame, and for every invalid file the reason
+it must be rejected. Every RV565 implementation (the C library, the Python
+package, CircuitPython, the browser converter and the MicroPython module)
+checks itself against these files in CI, so none needs a board or a display
+to prove it decodes the format.
+
+`tests/data/testpattern.rv565` (version 6, 24 frames of scrolling colour
+bars, 180×135, 24 FPS, 6,322 bytes) has SHA-256
 
     5908de84764962132f31543df0ca2276d10d7744fa2c292caf5fde3f66faa8a7
-
-`tests/check_host.py` checks the C decoder against Python's zlib frame by frame.
