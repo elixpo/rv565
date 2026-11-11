@@ -18,7 +18,7 @@ under CircuitPython 10.3.1 (measurements below).
 
 Measured on a Raspberry Pi Pico 2 (RP2350, CircuitPython 10.3.1), playing
 the 180x135, 24 FPS test pattern to a 320x240 ST7789 on SPI at 40 MHz
-(2026-11-11):
+(2026-11-11). Every pixel showed the right colour with both players:
 
 ==================  =======  ===================  =================
 Player              FPS      inflate per frame    draw per frame
@@ -130,8 +130,9 @@ MicroPython benchmarks use) before playing and back to ``0xC0``
 (``adafruit_st7789``'s value) afterwards; pass ``madctl=`` and
 ``restore_madctl=`` for other orientations or drivers. Modules smaller than
 the controller's 240x320 RAM need ``x_offset``/``y_offset`` as well. This
-path's timing is measured on a Pico 2 (above); its picture orientation and
-offsets have not yet been confirmed on a panel.
+path is checked on a Pico 2 with the benchmark's 320x240 ST7789 module:
+timing above, and colours, orientation and position correct with the
+default ``madctl=0x60`` and no offsets.
 
 Examples
 --------
