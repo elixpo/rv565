@@ -52,6 +52,7 @@ CODECS = ("stored", "zlib")
 KEYFRAME, DELTA, REPEAT, PARTIAL = 0, 1, 2, 3
 FRAME_TYPES = ("key", "delta", "repeat", "partial")
 BAND_LINES = 8  # default band height of the reference encoder
+MOTION_RANGE = 8  # default shift search range of the reference encoder, in pixels
 
 
 class RV565Error(ValueError):
@@ -103,8 +104,9 @@ def frame_lines(pixel_format, width, height):
 
 
 def _partial_layout(body, lines, line_bytes):
-    """Parse a partial delta body: (band height, changed bands, data offset,
-    decoded data size). Raises RV565Error if the header part is invalid."""
+    """Parse a partial delta body: (band height, changed bands, shifts,
+    data offset, decoded data size). Raises RV565Error if the header part is
+    invalid."""
     if len(body) < 1 or body[0] == 0:
         raise RV565Error("partial delta with band height 0")
     band = body[0]
@@ -118,8 +120,36 @@ def _partial_layout(body, lines, line_bytes):
         raise RV565Error("partial delta with no changed band")
     if any(mask[b >> 3] >> (b & 7) & 1 for b in range(count, 8 * mask_len)):
         raise RV565Error("partial delta sets a band past the frame")
+    start = 1 + mask_len + 2 * len(changed)
+    if len(body) < start:
+        raise RV565Error("partial delta too short for its band shifts")
+    shifts = []
+    for k in range(len(changed)):
+        dx, dy = (v - 256 if v > 127 else v for v in body[1 + mask_len + 2 * k:
+                                                          3 + mask_len + 2 * k])
+        if abs(dy) >= band:
+            raise RV565Error("partial delta shifts a band by %d lines, more than it has" % dy)
+        shifts.append((dx, dy))
     size = sum((min(lines, (b + 1) * band) - b * band) * line_bytes for b in changed)
-    return band, changed, 1 + mask_len, size
+    return band, changed, shifts, start, size
+
+
+def _predict(prev, first, end, line_bytes, dx, dy):
+    """Prediction of lines first..end-1 from prev, shifted by (dx bytes, dy
+    lines), never reaching outside the band; zero where it would."""
+    out = bytearray((end - first) * line_bytes)
+    for y in range(first, end):
+        src = y - dy
+        if not first <= src < end:
+            continue
+        line = prev[src * line_bytes:(src + 1) * line_bytes]
+        o = (y - first) * line_bytes
+        if dx >= 0:
+            if dx < line_bytes:
+                out[o + dx:o + line_bytes] = line[:line_bytes - dx]
+        elif -dx < line_bytes:
+            out[o:o + line_bytes + dx] = line[-dx:]
+    return bytes(out)
 
 
 @dataclass(frozen=True)
@@ -216,7 +246,7 @@ class Clip:
                                      % (i, length - 1, size))
                 if kind == PARTIAL:
                     lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
-                    _, _, start, want = _partial_layout(
+                    _, _, _, start, want = _partial_layout(
                         self.data[offset + 1:offset + length], lines, line_bytes)
                     if h.codec == "stored" and length - 1 - start != want:
                         raise RV565Error("stored partial frame %d has %d bytes, expected %d"
@@ -272,7 +302,7 @@ class Clip:
             return []
         if kind != PARTIAL:
             return [(0, lines)]
-        band, changed, _, _ = _partial_layout(self.payload(i), lines, line_bytes)
+        band, changed, _, _, _ = _partial_layout(self.payload(i), lines, line_bytes)
         runs = []
         for b in changed:
             first, end = b * band, min(lines, (b + 1) * band)
@@ -304,13 +334,14 @@ class Clip:
             h = self.header
             lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
             body = self.payload(i)
-            band, changed, start, size = _partial_layout(body, lines, line_bytes)
+            band, changed, shifts, start, size = _partial_layout(body, lines, line_bytes)
             data = self._decode_data(i, body[start:], size)
             out, pos = bytearray(prev), 0
-            for b in changed:
-                lo = b * band * line_bytes
-                hi = min(lines, (b + 1) * band) * line_bytes
-                out[lo:hi] = _xor(out[lo:hi], data[pos:pos + hi - lo])
+            for b, (dx, dy) in zip(changed, shifts):
+                first, end = b * band, min(lines, (b + 1) * band)
+                lo, hi = first * line_bytes, end * line_bytes
+                out[lo:hi] = _xor(_predict(prev, first, end, line_bytes, dx, dy),
+                                  data[pos:pos + hi - lo])
                 pos += hi - lo
             return bytes(out)
         return _xor(prev, self._body(i))
@@ -407,22 +438,66 @@ def _encode(data, codec, level):
     return bytes(data) if codec == "stored" else zlib.compress(bytes(data), level)
 
 
-def _partial_body(frame, prev, lines, line_bytes, band, codec, level):
+def _shift_steps(fmt, motion_range):
+    """(step, max) of the horizontal shift search, in bytes."""
+    m = motion_range
+    return {"rgb565be": (2, 2 * m), "rgb565le": (2, 2 * m), "rgb666": (3, 3 * m),
+            "rgb888": (3, 3 * m), "rgb444": (3, 3 * (m // 2)), "gray8": (1, m),
+            "gray4": (1, m // 2), "mono": (1, m // 8), "mono_vpage": (1, m)}[fmt]
+
+
+def _alternating(limit, step=1):
+    yield 0
+    for k in range(step, limit + 1, step):
+        yield -k
+        yield k
+
+
+def _nonzero(data):
+    return len(data) - data.count(0)
+
+
+def _partial_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565be",
+                  motion_range=0):
     """Body of a partial delta (None if no band changed or the band height
-    does not fit in a byte)."""
+    does not fit in a byte). With a motion range, each changed band gets the
+    first shift (in the documented search order) with the fewest nonzero
+    residual bytes."""
     if not 1 <= band <= 255:
         return None
     count = (lines + band - 1) // band
     mask = bytearray((count + 7) // 8)
-    parts = []
+    shifts, parts = bytearray(), []
+    step, max_dx = _shift_steps(fmt, motion_range) if motion_range else (1, 0)
+    max_dy = min(band - 1, 127) if motion_range else 0
+    max_dx = min(max_dx, 127 - 127 % step)
     for b in range(count):
-        lo, hi = b * band * line_bytes, min(lines, (b + 1) * band) * line_bytes
-        if frame[lo:hi] != prev[lo:hi]:
-            mask[b >> 3] |= 1 << (b & 7)
-            parts.append(_xor(frame[lo:hi], prev[lo:hi]))
+        first, end = b * band, min(lines, (b + 1) * band)
+        lo, hi = first * line_bytes, end * line_bytes
+        cur = frame[lo:hi]
+        if cur == prev[lo:hi]:
+            continue
+        mask[b >> 3] |= 1 << (b & 7)
+        best = _xor(cur, prev[lo:hi])
+        best_cost, best_shift = _nonzero(best), (0, 0)
+        if best_cost and (max_dx or max_dy):
+            for dy in _alternating(min(max_dy, end - first - 1)):
+                for dx in _alternating(max_dx, step):
+                    if dx == 0 and dy == 0:
+                        continue
+                    res = _xor(cur, _predict(prev, first, end, line_bytes, dx, dy))
+                    cost = _nonzero(res)
+                    if cost < best_cost:
+                        best, best_cost, best_shift = res, cost, (dx, dy)
+                        if cost == 0:
+                            break
+                if best_cost == 0:
+                    break
+        shifts += bytes((best_shift[0] & 0xFF, best_shift[1] & 0xFF))
+        parts.append(best)
     if not parts:
         return None
-    return bytes((band,)) + bytes(mask) + _encode(b"".join(parts), codec, level)
+    return bytes((band,)) + bytes(mask) + bytes(shifts) + _encode(b"".join(parts), codec, level)
 
 
 def _apply_tolerance(frame, prev, width, height, fmt, tolerance):
@@ -450,7 +525,8 @@ def _apply_tolerance(frame, prev, width, height, fmt, tolerance):
 
 
 def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec="zlib",
-                  keyframe_interval=1, band_lines=BAND_LINES, tolerance=0):
+                  keyframe_interval=1, band_lines=BAND_LINES, tolerance=0,
+                  motion_range=MOTION_RANGE):
     """Yield (frame type, body) for each frame, already in ``pixel_format``.
 
     Frames at multiples of ``keyframe_interval`` are keyframes; any other frame
@@ -459,6 +535,8 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
     and a keyframe. ``level`` is the zlib level (1 is what the paper
     measured). ``tolerance`` (0-255, default 0: lossless) keeps a pixel of
     the previous decoded frame where every channel is within it, in 8 bits.
+    ``motion_range`` (pixels, 0 turns it off) bounds the per-band shift search
+    of partial deltas.
     """
     size = frame_size(pixel_format, width, height)
     fmt = PIXEL_FORMATS[_format_index(pixel_format)]
@@ -484,7 +562,8 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
             if codec != "stored":
                 options.append((DELTA, _encode(_xor(frame, prev), codec, level)))
             if band_lines:
-                partial = _partial_body(frame, prev, lines, line_bytes, band_lines, codec, level)
+                partial = _partial_body(frame, prev, lines, line_bytes, band_lines, codec, level,
+                                        fmt, motion_range)
                 if partial is not None:
                     options.append((PARTIAL, partial))
             # The smallest body, except that a partial delta wins whenever it
@@ -501,13 +580,14 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
 
 def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be",
           codec="zlib", keyframe_interval=1, version=VERSION, band_lines=BAND_LINES,
-          tolerance=0):
+          tolerance=0, motion_range=MOTION_RANGE):
     """Write frames (an iterable of bytes in ``pixel_format``) as an RV565 file.
 
     ``target`` is a path or a seekable binary file object. ``version=6``
     writes a version 6 file for players older than RV565 2.0; it allows only
     rgb565be, zlib and keyframe_interval 1 (and so no partial deltas).
-    ``band_lines`` and ``tolerance`` are passed to encode_frames. Returns the
+    ``band_lines``, ``tolerance`` and ``motion_range`` are passed to
+    encode_frames. Returns the
     number of frames.
     """
     if not (0 < width <= 0xFFFF and 0 < height <= 0xFFFF):
@@ -525,14 +605,14 @@ def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be
         raise RV565Error("can write version 6 or 7, not %r" % (version,))
     if hasattr(target, "write"):
         return _write(target, width, height, fps, frames, level, fmt, cod,
-                      keyframe_interval, version, band_lines, tolerance)
+                      keyframe_interval, version, band_lines, tolerance, motion_range)
     with Path(target).open("wb") as out:
         return _write(out, width, height, fps, frames, level, fmt, cod,
-                      keyframe_interval, version, band_lines, tolerance)
+                      keyframe_interval, version, band_lines, tolerance, motion_range)
 
 
 def _write(out, width, height, fps, frames, level, fmt, codec, interval, version,
-           band_lines=BAND_LINES, tolerance=0):
+           band_lines=BAND_LINES, tolerance=0, motion_range=MOTION_RANGE):
     start = out.tell()
     if version == VERSION_6:
         out.write(HEADER_V6.pack(MAGIC, version, width, height, fps, 0, 0))
@@ -541,7 +621,7 @@ def _write(out, width, height, fps, frames, level, fmt, codec, interval, version
                               HEADER.size, fmt, codec, interval))
     count = 0
     for kind, body in encode_frames(frames, width, height, level, fmt, codec, interval,
-                                    band_lines, tolerance):
+                                    band_lines, tolerance, motion_range):
         count += 1
         if count > MAX_FRAMES:
             raise RV565Error("more than %d frames" % MAX_FRAMES)

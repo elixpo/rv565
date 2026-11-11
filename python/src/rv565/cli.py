@@ -2,7 +2,7 @@
 
   rv565 encode SOURCE OUT.rv565 [--start S] [--seconds N] [--fps F] [--size WxH]
                 [--format F] [--codec C] [--keyframe-interval K] [--band-lines B]
-                [--tolerance T] [--level L] [--v6]
+                [--motion-range M] [--tolerance T] [--level L] [--v6]
   rv565 info FILE.rv565 [--chip C] [--transfer-us T]
   rv565 verify FILE.rv565
   rv565 c-array FILE.rv565 OUT.h [--name NAME]
@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import (BAND_LINES, CODECS, COST_ESP32S3_180x135, COST_RP2350_180x135, MAX_FPS,
+from . import (BAND_LINES, CODECS, MOTION_RANGE, COST_ESP32S3_180x135, COST_RP2350_180x135, MAX_FPS,
                PIXEL_FORMATS, RV565Error, convert, frame_lines, open as open_clip, write)
 
 
@@ -88,7 +88,7 @@ def container_options(args):
         return {"version": 6}
     return {"pixel_format": args.format, "codec": args.codec,
             "keyframe_interval": args.keyframe_interval, "band_lines": args.band_lines,
-            "tolerance": args.tolerance}
+            "tolerance": args.tolerance, "motion_range": args.motion_range}
 
 
 def describe(args):
@@ -216,6 +216,11 @@ def add_container_args(p):
                    metavar="0-255",
                    help="band height for partial deltas, which store and send only the "
                         "changed bands (default %d; 0 turns them off)" % BAND_LINES)
+    p.add_argument("--motion-range", type=int, default=MOTION_RANGE, choices=range(0, 64),
+                   metavar="0-63",
+                   help="search a shift of up to M pixels for each changed band, so "
+                        "scrolling and panning cost less (default %d; 0 turns it off)"
+                        % MOTION_RANGE)
     p.add_argument("--tolerance", type=int, default=0, choices=range(0, 256), metavar="0-255",
                    help="keep the previous pixel when every channel is within T of it "
                         "(8-bit levels); 0, the default, is lossless. 8 is about one step "
