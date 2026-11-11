@@ -20,6 +20,7 @@ files:
     - "benchmarks/**"
     - "tools/**"
     - "python/**"
+    - "ports/circuitpython/**"
     - "contrib/**"
     - "tests/**"
     - "examples/**"

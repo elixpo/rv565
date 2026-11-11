@@ -60,6 +60,25 @@ Gives desktop users `pip install rv565`, and download counts we can quote.
       (`elixpo/rv565`, workflow `publish-pypi.yml`). Check the name is free first.
 - [x] 🙋 Run the publish workflow for 1.1.0.
 
+### 1.3b CircuitPython library ([#30](https://github.com/elixpo/rv565/issues/30)), experimental
+
+Reaches CircuitPython's beginner audience on ESP32-S3 and RP2350 boards
+without C. Pure Python, so a few FPS rather than 24.
+
+- [x] 🤖 `ports/circuitpython/circuitpython_rv565.py`: reader (path, file or
+      bytes; lazy frame index; full validation), `Player` (`displayio.Bitmap`
+      + `RGB565_SWAPPED` converter, filled by `bitmaptools.readinto`, paced
+      with frame skipping, reports achieved FPS) and experimental
+      `DirectPlayer` (frames straight to the ST7789 over its bus).
+- [x] 🤖 Examples (any `board.DISPLAY`, Pico 2 + ST7789 on SPI0, ESP32-S3 TFT
+      Feather), host tests with fake `displayio` (all 24 test-pattern frames
+      match zlib), cookiecutter-style packaging.
+- [ ] 🙋 Run the test pattern on a Pico 2 with CircuitPython (displayio and
+      direct examples) and record the achieved FPS in its README.
+- [ ] 🙋 Run it on an ESP32-S3 CircuitPython board.
+- [ ] 🤖 Then: own `CircuitPython_RV565` repository with the cookiecutter CI,
+      and a PR to the Adafruit CircuitPython Community Bundle.
+
 ### 1.4 Online converter on oreo.elixpo
 
 A free page that turns a video into an `.rv565` (or an Arduino `clip.h`) in
