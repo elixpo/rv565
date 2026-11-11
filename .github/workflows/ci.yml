@@ -10,14 +10,18 @@ permissions:
 
 jobs:
   host-tests:
-    name: Host tests (core + player)
+    name: Host tests (core, player, conformance)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Version numbers agree
         run: python3 -I tools/check_version.py
-      - name: Build and run
+      - name: Conformance vectors match their generator
+        run: python3 -I tools/make_conformance.py --check
+      - name: Build and run (includes the C conformance test on tests/data/v7)
         run: make -C tests
+      - name: Sanitizers (ASan, UBSan)
+        run: make -C tests clean all CFLAGS="-std=c99 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all"
       - name: CLI round trip
         run: |
           python3 -I tools/rv565.py testpattern /tmp/tp.rv565

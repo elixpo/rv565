@@ -177,13 +177,34 @@ for (;;) {
 }
 ```
 
-Leave `player.decoder` empty to use the single-core serial path.
+Leave `player.decoder` empty to use the single-core serial path. The player
+plays RGB565 big-endian clips, version 7 (keyframes, XOR deltas and repeats,
+zlib or stored) and version 6; it needs `player.frames[1]` for dual-core
+decoding and for clips with zlib deltas, sends nothing for a repeat frame,
+and returns `RV565_ERR_UNSUPPORTED` for other pixel formats, since the
+bundled ST7789 drivers run the panel in RGB565.
+
+For any of the nine pixel formats (your own display code, or a monochrome
+OLED), decode frames yourself:
+
+```c
+uint8_t *frame = ..., *scratch = ...;   // rv565_frame_bytes(&clip.header) each
+rv565_seek(&clip, 0, frame, size, scratch, size);            // frame 0
+for (uint16_t i = 1; i < clip.header.frames; ++i) {
+    // in place; scratch is used only for zlib deltas
+    rv565_decode(&clip, i, frame, frame, size, scratch, size);
+}
+```
+
+`rv565_decode(clip, i, prev, dst, ...)` with two buffers (`prev != dst`)
+needs no scratch; `rv565_seek` jumps to any frame from the keyframe at or
+before it, at most K−1 records away.
 
 ## Layout
 
 ```
 src/                 portable core, player, and platform ports (Arduino src/)
-  rv565.[ch]         container parsing, validation, inflate, scaling, cost model
+  rv565.[ch]         container parsing (versions 6 and 7), validation, decode, scaling, cost model
   rv565_player.[ch]  stripe pipeline with optional second-core decoding
   port/esp32/        SPI GDMA display + FreeRTOS core-1 worker
   port/rp2/          SPI DMA display + multicore worker
@@ -194,7 +215,7 @@ examples_pico/       Pico SDK example project
 ports/circuitpython/ CircuitPython library (experimental, pure Python)
 ports/micropython/   MicroPython user C module
 tools/rv565.py       encoder and inspection CLI
-tests/               host tests (make -C tests)
+tests/               host tests and the format conformance check (make -C tests)
 benchmarks/          the paper's standalone ESP32-S3 benchmark and collectors
 docs/                format specification, architecture notes, ecosystem plan
 ```
