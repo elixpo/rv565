@@ -57,6 +57,22 @@ class ColorConverter:
         raise NotImplementedError(self.input_colorspace)
 
 
+class Palette:
+    def __init__(self, color_count):
+        self.colors = [0] * color_count
+
+    def __len__(self):
+        return len(self.colors)
+
+    def __setitem__(self, index, color):
+        if not 0 <= color <= 0xFFFFFF:
+            raise ValueError("color")
+        self.colors[index] = color
+
+    def __getitem__(self, index):
+        return self.colors[index]
+
+
 class TileGrid:
     def __init__(self, bitmap, *, pixel_shader):
         self.bitmap = bitmap
@@ -99,22 +115,45 @@ class FourWire:
 def readinto(bitmap, file, bits_per_pixel, element_size=1,
              reverse_pixels_in_element=False, swap_bytes_in_element=False,
              reverse_rows=False):
-    if bits_per_pixel != 16 or element_size != 2 or reverse_pixels_in_element \
-            or reverse_rows:
-        raise NotImplementedError("fake readinto models 16-bit elements only")
+    """CircuitPython's bitmaptools.readinto for 1-, 2-, 4-, 8- and 16-bit
+    pixels: rows padded to whole elements; within an element the first pixel
+    is in the least significant bits unless reverse_pixels_in_element."""
+    if reverse_rows or bits_per_pixel not in (1, 2, 4, 8, 16):
+        raise NotImplementedError("fake readinto: unmodelled options")
+    if bits_per_pixel == 16 and element_size != 2:
+        raise NotImplementedError("fake readinto models 16-bit in 2-byte elements")
+    if bits_per_pixel < 16 and element_size != 1:
+        raise NotImplementedError("fake readinto models small pixels in bytes")
+    element_bits = 8 * element_size
+    row_bytes = element_size * ((bitmap.width * bits_per_pixel + element_bits - 1)
+                                // element_bits)
+    mask = (1 << bits_per_pixel) - 1
+    per = 8 // bits_per_pixel if bits_per_pixel < 8 else 1
     for y in range(bitmap.height):
-        row = file.read(2 * bitmap.width)
+        row = file.read(row_bytes)
+        if len(row) != row_bytes:
+            raise EOFError("short read")
         for x in range(bitmap.width):
-            lo, hi = row[2 * x], row[2 * x + 1]
-            if swap_bytes_in_element:
-                lo, hi = hi, lo
-            bitmap[x, y] = lo | (hi << 8)
+            if bits_per_pixel == 16:
+                lo, hi = row[2 * x], row[2 * x + 1]
+                if swap_bytes_in_element:
+                    lo, hi = hi, lo
+                value = lo | (hi << 8)
+            elif bits_per_pixel == 8:
+                value = row[x]
+            else:
+                k = x % per
+                if reverse_pixels_in_element:
+                    k = per - 1 - k
+                value = (row[x // per] >> (k * bits_per_pixel)) & mask
+            bitmap[x, y] = value
 
 
 def install(with_readinto=True):
     """Register fake displayio and bitmaptools modules; return displayio."""
     displayio = types.ModuleType("displayio")
-    for name in ("Bitmap", "Colorspace", "ColorConverter", "TileGrid", "Group"):
+    for name in ("Bitmap", "Colorspace", "ColorConverter", "Palette", "TileGrid",
+                 "Group"):
         setattr(displayio, name, globals()[name])
     bitmaptools = types.ModuleType("bitmaptools")
     if with_readinto:

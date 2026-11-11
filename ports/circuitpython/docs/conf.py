@@ -20,6 +20,6 @@ master_doc = "index"
 project = "circuitpython-rv565"
 copyright = "2026 Ayushman Bhattacharya"  # pylint: disable=redefined-builtin
 author = "Ayushman Bhattacharya"
-version = release = "0.1.0"
+version = release = "2.0.0"
 exclude_patterns = ["_build"]
 html_theme = "alabaster"
