@@ -260,6 +260,7 @@ OreoOS under MIT.
   on [PyPI](https://pypi.org/project/circuitpython-rv565/) and
   [Read the Docs](https://circuitpython-rv565.readthedocs.io)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+- Listed in [Awesome Raspberry Pi](https://github.com/thibmaek/awesome-raspberry-pi#projects)
 
 **Written about**
 
@@ -292,8 +293,7 @@ OreoOS under MIT.
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)
 - Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67),
   [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92),
-  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235),
-  [awesome-raspberry-pi #371](https://github.com/thibmaek/awesome-raspberry-pi/pull/371) and
+  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235) and
   [awesome-circuitpython #63](https://github.com/adafruit/awesome-circuitpython/pull/63)
 
 Using RV565 in a project? Tell us in
