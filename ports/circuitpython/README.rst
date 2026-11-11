@@ -171,7 +171,10 @@ All figures for a 180x135 clip (``S`` = 48,600 bytes in RGB565):
   about ``2 S`` plus the body, the same for keyframes and deltas.
 * **Partial deltas:** the inflate output is only as large as the changed
   bands, and is XORed into those bands of the frame buffer in place; the
-  rest of the frame is not touched. A stored partial delta read from a file
+  rest of the frame is not touched. A band with a shift (``dx``, ``dy``) is
+  first predicted from a copy of itself, so shifted bands need one band of
+  scratch (band height x line bytes, allocated once) and one line of
+  zeros. A stored partial delta read from a file
   uses the start of the scratch buffer below.
 * **Stored codec:** a keyframe read from a file goes straight into the frame
   buffer with ``readinto``, with no other allocation; a stored delta needs
@@ -212,7 +215,8 @@ to the last keyframe), so a long keyframe interval saves less time than it
 saves space on a slow board. Repeat frames are neither decoded nor drawn.
 
 A partial delta costs its (smaller) inflate plus XOR over its changed bands
-only, and the players send only those rows: ``DirectPlayer`` sets the row
+only (plus, for a shifted band, one copy of the band and a slice copy per
+line), and the players send only those rows: ``DirectPlayer`` sets the row
 window and writes each run of changed bands, and ``Player`` copies only those
 rows into the bitmap, so ``displayio`` refreshes only that area. After
 skipped frames both draw the union of the rows the skipped frames changed.

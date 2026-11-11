@@ -118,6 +118,36 @@ class ConformanceTest(unittest.TestCase):
         self.assertEqual({(i["pixel_format"], i["codec"]) for i in partial},
                          {(f, c) for f in rv565.PIXEL_FORMATS for c in rv565.CODECS})
 
+    def test_shift_vectors_shift(self):
+        shifted = 0
+        for item in MANIFEST["valid"]:
+            if "shift" not in item["file"]:
+                continue
+            clip = rv565.open(vector(item["file"]))
+            for i in range(len(clip)):
+                if clip.frame_type(i) == "partial":
+                    offset, length = clip._span(i)
+                    shifts = clip._layout(offset, length)[2]
+                    shifted += any(shifts)
+        self.assertGreater(shifted, 0)
+
+    def test_shifted_band_matches_reference_prediction(self):
+        # Every (dx, dy) on a 3-line band of 5-byte lines, including shifts
+        # past the line and the band, against the reference's _predict.
+        rng = random.Random(5)
+        clip = rv565.open(vector("gray8_zlib_k4.rv565"))
+        clip.line_bytes = 5
+        prev = bytes(rng.randrange(256) for _ in range(30))
+        residual = bytes(rng.randrange(256) for _ in range(15))
+        for dx in range(-7, 8):
+            for dy in range(-2, 3):
+                frame = bytearray(prev)
+                clip._decode_band(frame, residual, 0, 2, 5, dx, dy)
+                pred = REFERENCE._predict(prev, 2, 5, 5, dx, dy)
+                want = bytes(a ^ b for a, b in zip(pred, residual))
+                self.assertEqual(bytes(frame[10:25]), want, (dx, dy))
+                self.assertEqual(frame[:10] + frame[25:], prev[:10] + prev[25:])
+
     def test_every_invalid_vector_is_rejected_at_its_stage(self):
         for item in MANIFEST["invalid"]:
             with self.subTest(item["file"]):
@@ -204,6 +234,8 @@ class ConformanceTest(unittest.TestCase):
             "invalid_partial_band_past_end.rv565": "past the frame",
             "invalid_partial_stored_wrong_size.rv565": "stored partial frame",
             "invalid_partial_at_keyframe.rv565": "must be a keyframe",
+            "invalid_partial_short_shifts.rv565": "too short for its band shifts",
+            "invalid_partial_shift_dy_too_far.rv565": "more than it has",
         }
         for name, message in cases.items():
             with self.subTest(name):
@@ -260,7 +292,11 @@ class V7PlayerTest(unittest.TestCase):
                 ("rgb565le_stored_partial_k5.rv565", "RGB565"),
                 ("gray8_stored_partial_k5.rv565", None),
                 ("gray4_zlib_partial_k5.rv565", None),
-                ("mono_zlib_partial_k5.rv565", None)):
+                ("mono_zlib_partial_k5.rv565", None),
+                ("rgb565be_zlib_shift_k10.rv565", "RGB565_SWAPPED"),
+                ("rgb565le_stored_shift_k10.rv565", "RGB565"),
+                ("gray4_zlib_shift_k10.rv565", None),
+                ("mono_zlib_shift_k10.rv565", None)):
             with self.subTest(name):
                 item = entry(name)
                 player = rv565.Player(rv565.open(vector(name)), fakes.Display())
@@ -501,6 +537,29 @@ class PartialTest(unittest.TestCase):
                     self.assertEqual(sent, rows * 2 * W)
                     if clip.frame_type(i) == "partial":
                         self.assertLess(sent, 2 * W * H)
+
+    def test_direct_player_on_vectors(self):
+        for name in ("rgb565be_zlib_partial_k5.rv565", "rgb565be_stored_partial_k5.rv565",
+                     "rgb565be_zlib_shift_k10.rv565", "rgb666_zlib_partial_k5.rv565"):
+            with self.subTest(name):
+                item = entry(name)
+                clip = rv565.open(vector(name))
+                bpp = 3 if item["pixel_format"] == "rgb666" else 2
+                bus = fakes.FourWire()
+                panel = FakePanel(320, 240, bpp)
+                player = rv565.DirectPlayer(clip, bus, 320, 240,
+                                            clock=fakes.FakeClock(),
+                                            sleep=lambda s: None)
+                x0, y0 = (320 - clip.width) // 2, (240 - clip.height) // 2
+                for i in range(len(clip)):
+                    bus.sent.clear()
+                    player.show(i)
+                    panel.run(bus.sent)
+                    self.assertEqual(sha(panel.region(x0, y0, clip.width, clip.height)),
+                                     item["frame_sha256"][i], i)
+                    rows = sum(c for _, c in item["changed_lines"][i])
+                    sent = sum(len(d) for c, d in bus.sent if c == 0x2C)
+                    self.assertEqual(sent, rows * clip.line_bytes)
 
     def test_direct_player_play_counts_rows(self):
         data, frames = square_clip()

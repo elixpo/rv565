@@ -149,12 +149,17 @@ def frame_lines(pixel_format, width, height):
     return height, frame_size(pixel_format, width, 1)
 
 
-def _partial_layout(head, lines, line_bytes):
-    """Parse the start of a partial delta body (band height and mask).
+def _partial_layout(head, lines, line_bytes, shifts=None):
+    """Parse the start of a partial delta body: band height, band mask and
+    the band shifts.
 
-    :return: ``(band, changed, data_offset, data_size)``: the band height,
-        the list of changed band numbers, where the encoded data starts in
-        the body, and how many bytes it decodes to
+    :param head: the body from its start, at least through the band mask
+    :param shifts: the bytes after the mask (two per changed band); taken
+        from ``head`` when omitted
+    :return: ``(band, changed, shifts, data_offset, data_size)``: the band
+        height, the list of changed band numbers, a ``bytes`` of ``dx, dy``
+        pairs (as unsigned bytes) per changed band, where the encoded data
+        starts in the body, and how many bytes it decodes to
     """
     if len(head) < 1 or head[0] == 0:
         raise RV565Error("partial delta with band height 0")
@@ -174,7 +179,21 @@ def _partial_layout(head, lines, line_bytes):
             size += ((end if end < lines else lines) - b * band) * line_bytes
     if not changed:
         raise RV565Error("partial delta with no changed band")
-    return band, changed, 1 + mask_len, size
+    start = 1 + mask_len + 2 * len(changed)
+    if shifts is None:
+        shifts = head[1 + mask_len : start]
+    if len(shifts) < 2 * len(changed):
+        raise RV565Error("partial delta too short for its band shifts")
+    shifts = bytes(shifts[: 2 * len(changed)])
+    for k in range(len(changed)):
+        dy = shifts[2 * k + 1]
+        if dy > 127:
+            dy -= 256
+        if dy >= band or -dy >= band:
+            raise RV565Error(
+                "partial delta shifts a band by %d lines, more than it has" % dy
+            )
+    return band, changed, shifts, start, size
 
 
 def parse_header(data, size=None):
@@ -354,6 +373,8 @@ class Clip:
         self._types = None  # frame type per record (version 7 only)
         self._frame = None  # decoded frame buffer
         self._scratch = None  # stored (partial) deltas read from a file
+        self._band = None  # one band of a shifted partial delta
+        self._zeros = None  # one line of zeros
         self._pos = None  # index of the frame held in _frame
         self._decompress = decompress or _zlib_decompress
         self._sized_inflate = decompress is None  # try passing the output size
@@ -422,7 +443,7 @@ class Clip:
                     if length != 1:
                         raise RV565Error("repeat frame %d has a body" % i)
                 elif kind == PARTIAL:
-                    _, _, start, want = self._layout(offset + 5, length - 1)
+                    _, _, _, start, want = self._layout(offset + 5, length - 1)
                     if stored and length - 1 - start != want:
                         raise RV565Error(
                             "stored partial frame %d has %d bytes, expected %d"
@@ -458,13 +479,24 @@ class Clip:
         return start, end - start
 
     def _layout(self, offset, length):
-        """:func:`_partial_layout` of the partial delta body at ``offset``."""
+        """:func:`_partial_layout` of the partial delta body at ``offset``:
+        reads the band height and mask, then the shifts of the changed
+        bands."""
         head = (self.lines + 7) // 8 + 1  # the longest band mask, plus B
-        return _partial_layout(
-            bytes(self._source.read(offset, length if length < head else head)),
-            self.lines,
-            self.line_bytes,
-        )
+        head = bytes(self._source.read(offset, length if length < head else head))
+        if len(head) < 1 or head[0] == 0:
+            return _partial_layout(head, self.lines, self.line_bytes)
+        mask_end = 1 + ((self.lines + head[0] - 1) // head[0] + 7) // 8
+        count = 0
+        for v in head[1:mask_end]:
+            while v:
+                count += v & 1
+                v >>= 1
+        want = 2 * count
+        if length - mask_end < want:
+            want = max(0, length - mask_end)
+        shifts = bytes(self._source.read(offset + mask_end, want)) if want else b""
+        return _partial_layout(head, self.lines, self.line_bytes, shifts)
 
     def _kind(self, i):
         return self._types[i] if self._types is not None else KEYFRAME
@@ -496,7 +528,7 @@ class Clip:
         if kind != PARTIAL:
             return [(0, self.lines)]
         offset, length = self._span(i)
-        band, changed, _, _ = self._layout(offset, length)
+        band, changed, _, _, _ = self._layout(offset, length)
         lines = self.lines
         runs = []
         for b in changed:
@@ -613,12 +645,39 @@ class Clip:
             )
         return data
 
-    def _decode_band(self, frame, data, pos, lo, hi):
+    def _decode_band(self, frame, data, pos, lo, hi, dx, dy):
         """Decode one changed band, lines ``lo`` to ``hi - 1``, in place:
-        XOR its residual (``data`` from ``pos``) into the previous frame's
-        lines. Returns where the next band's data starts."""
-        n = (hi - lo) * self.line_bytes
-        _xor_into(frame, data, lo * self.line_bytes, pos, n)
+        replace the previous frame's lines by their prediction (the band
+        shifted by ``dx`` bytes and ``dy`` lines, zero where that reaches
+        outside the band or the line), then XOR in the residual (``data``
+        from ``pos``). Returns where the next band's data starts."""
+        stride = self.line_bytes
+        n = (hi - lo) * stride
+        if dx or dy:
+            # Predict from a copy of the band, so the frame can be
+            # overwritten in place: one band of scratch.
+            if self._band is None or len(self._band) < n:
+                self._band = bytearray(n)
+            if self._zeros is None:
+                self._zeros = bytes(stride)
+            copy = memoryview(self._band)
+            fv = memoryview(frame)
+            copy[:n] = fv[lo * stride : hi * stride]
+            zeros = self._zeros
+            for y in range(lo, hi):
+                o = y * stride
+                src = y - dy
+                if not lo <= src < hi or dx >= stride or -dx >= stride:
+                    fv[o : o + stride] = zeros
+                    continue
+                s = (src - lo) * stride
+                if dx >= 0:
+                    fv[o : o + dx] = zeros[:dx]
+                    fv[o + dx : o + stride] = copy[s : s + stride - dx]
+                else:
+                    fv[o : o + stride + dx] = copy[s - dx : s + stride]
+                    fv[o + stride + dx : o + stride] = zeros[: -dx]
+        _xor_into(frame, data, lo * stride, pos, n)
         return pos + n
 
     def _apply(self, i):
@@ -632,7 +691,7 @@ class Clip:
             # XOR the decoded bands into their lines, in place; the decoded
             # data is only as large as the changed bands.
             offset, length = self._span(i)
-            band, changed, start, size = self._layout(offset, length)
+            band, changed, shifts, start, size = self._layout(offset, length)
             into = None
             if from_file:
                 if self._scratch is None:
@@ -641,12 +700,22 @@ class Clip:
             data = self._body(i, into, offset + start, length - start, size)
             lines = self.lines
             pos = 0
-            for b in changed:
+            for k, b in enumerate(changed):
                 lo = b * band
                 hi = lo + band
                 if hi > lines:
                     hi = lines
-                pos = self._decode_band(frame, data, pos, lo, hi)
+                dx = shifts[2 * k]
+                dy = shifts[2 * k + 1]
+                pos = self._decode_band(
+                    frame,
+                    data,
+                    pos,
+                    lo,
+                    hi,
+                    dx - 256 if dx > 127 else dx,
+                    dy - 256 if dy > 127 else dy,
+                )
             return
         if kind == KEYFRAME:
             if from_file:

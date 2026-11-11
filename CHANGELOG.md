@@ -109,8 +109,9 @@ API changes from 1.x (source-incompatible where noted):
   both skip repeat frames and name the supported formats for any other clip.
   The version 7 paths have not yet run on a board.
 - CircuitPython library: partial delta frames (type 3). The index checks
-  each partial delta's band height, band mask and stored size; decoding
-  inflates only the changed bands and XORs them in place into the reused
+  each partial delta's band height, band mask, band shifts and stored size;
+  decoding inflates only the changed bands, predicts shifted bands from a
+  one-band scratch copy, and XORs the residuals in place into the reused
   frame buffer. `Clip.changed_lines(i)` matches the reference and
   `Clip.dirty_lines(since, i)` merges it over skipped frames. `DirectPlayer`
   sends one row window and write per run of changed bands, `Player` copies
