@@ -46,6 +46,13 @@ static void begin_frame(void *)
     tft.setAddrWindow(0, 0, tft.width(), tft.height());
 }
 
+// Partial deltas: only the rows that changed are sent.
+static void begin_rows(void *, uint16_t first_row, uint16_t rows)
+{
+    tft.startWrite();
+    tft.setAddrWindow(0, first_row, tft.width(), rows);
+}
+
 static void queue_stripe(void *, const uint8_t *data, size_t length)
 {
     // Stripes are already big-endian RGB565; setSwapBytes(false) sends them as is.
@@ -94,6 +101,7 @@ void setup()
 
     player.display.ctx = NULL;
     player.display.begin_frame = begin_frame;
+    player.display.begin_rows = begin_rows;
     player.display.queue_stripe = queue_stripe;
     player.display.wait_stripe = wait_stripe;
     player.display.end_frame = end_frame;

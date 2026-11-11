@@ -180,6 +180,24 @@ rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
                                    rv565_line_run_t *runs, size_t max_runs,
                                    size_t *count);
 
+/* The same for one partial delta body (frame type 3, type byte excluded) of a
+ * frame of `lines` lines of `line_bytes` bytes, e.g. for a reader that parses
+ * the container itself. Returns RV565_ERR_PARTIAL for an invalid body. */
+rv565_status_t rv565_partial_runs(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes,
+                                  rv565_line_run_t *runs, size_t max_runs, size_t *count);
+
+/* Apply one partial delta body to a frame of `lines` lines of `line_bytes`
+ * bytes, as rv565_decode() does for a partial frame: `prev` holds the
+ * previous frame and is dst itself (in place: only the changed bands are
+ * written; a zlib body needs scratch of at least the changed bands' size) or
+ * does not overlap it (all of dst is written, no scratch). `codec` is
+ * RV565_CODEC_STORED or RV565_CODEC_ZLIB. */
+rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
+                                   uint16_t lines, size_t line_bytes, uint8_t codec,
+                                   const uint8_t *prev, uint8_t *dst,
+                                   uint8_t *scratch, size_t scratch_len);
+
 /* Body pointer and length of frame i, in O(1): the encoded frame or delta,
  * the whole partial delta body (band height and mask included), or length 0
  * for a repeat. */

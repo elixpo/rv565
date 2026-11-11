@@ -171,10 +171,14 @@ static void band_lines(const partial_t *p, uint32_t b, uint32_t *first, uint32_t
     *end = *first + p->band < p->lines ? *first + p->band : p->lines;
 }
 
-static rv565_status_t partial_parse(const rv565_header_t *h, const uint8_t *body,
+static rv565_status_t partial_parse(uint16_t lines, size_t line_bytes, const uint8_t *body,
                                     uint32_t length, partial_t *p)
 {
-    rv565_frame_lines(h, &p->lines, &p->line_bytes);
+    p->lines = lines;
+    p->line_bytes = line_bytes;
+    if (body == NULL || lines == 0 || line_bytes == 0) {
+        return RV565_ERR_ARG;
+    }
     if (length < 1 || body[0] == 0) {
         return RV565_ERR_PARTIAL;
     }
@@ -254,7 +258,10 @@ rv565_status_t rv565_open(rv565_clip_t *clip, const uint8_t *data, size_t size,
                 }
             } else if (type == RV565_FRAME_PARTIAL) {
                 partial_t p;
-                status = partial_parse(&h, data + cursor + 1, length - 1u, &p);
+                uint16_t lines;
+                size_t line_bytes;
+                rv565_frame_lines(&h, &lines, &line_bytes);
+                status = partial_parse(lines, line_bytes, data + cursor + 1, length - 1u, &p);
                 if (status != RV565_OK) {
                     return status;
                 }
@@ -305,6 +312,50 @@ int32_t rv565_keyframe_at_or_before(const rv565_clip_t *clip, uint16_t i)
     return i;
 }
 
+rv565_status_t rv565_partial_runs(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes,
+                                  rv565_line_run_t *runs, size_t max_runs, size_t *count)
+{
+    if (count == NULL || (runs == NULL && max_runs != 0)) {
+        return RV565_ERR_ARG;
+    }
+    *count = 0;
+    partial_t p;
+    const rv565_status_t status = partial_parse(lines, line_bytes, body, length, &p);
+    if (status != RV565_OK) {
+        return status;
+    }
+    size_t n = 0;
+    uint32_t run_first = 0, run_end = 0;  /* current run; empty while equal */
+    for (uint32_t b = 0; b < p.bands; ++b) {
+        if (!band_changed(&p, b)) {
+            continue;
+        }
+        uint32_t first, end;
+        band_lines(&p, b, &first, &end);
+        if (run_end != run_first && run_end == first) {
+            run_end = end;
+            continue;
+        }
+        if (run_end != run_first) {
+            if (n < max_runs) {
+                runs[n].first = (uint16_t)run_first;
+                runs[n].count = (uint16_t)(run_end - run_first);
+            }
+            ++n;
+        }
+        run_first = first;
+        run_end = end;
+    }
+    if (n < max_runs) {
+        runs[n].first = (uint16_t)run_first;
+        runs[n].count = (uint16_t)(run_end - run_first);
+    }
+    ++n;
+    *count = n;
+    return n <= max_runs ? RV565_OK : RV565_ERR_ARG;
+}
+
 rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
                                    rv565_line_run_t *runs, size_t max_runs,
                                    size_t *count)
@@ -333,40 +384,11 @@ rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
     } else {
         const uint8_t *body;
         uint32_t length;
-        partial_t p;
+        uint16_t lines;
+        size_t line_bytes;
         rv565_payload(clip, i, &body, &length);
-        const rv565_status_t status = partial_parse(&clip->header, body, length, &p);
-        if (status != RV565_OK) {
-            return status;
-        }
-        uint32_t run_first = 0, run_end = 0;  /* current run, empty if equal */
-        for (uint32_t b = 0; b <= p.bands; ++b) {
-            const int changed = b < p.bands && band_changed(&p, b);
-            if (changed) {
-                const uint32_t first = b * p.band;
-                const uint32_t end = first + p.band < p.lines ? first + p.band : p.lines;
-                if (run_end != run_first && run_end == first) {
-                    run_end = end;
-                    continue;
-                }
-                if (run_end != run_first) {
-                    if (n < max_runs) {
-                        runs[n].first = (uint16_t)run_first;
-                        runs[n].count = (uint16_t)(run_end - run_first);
-                    }
-                    ++n;
-                }
-                run_first = first;
-                run_end = end;
-            }
-        }
-        if (run_end != run_first) {
-            if (n < max_runs) {
-                runs[n].first = (uint16_t)run_first;
-                runs[n].count = (uint16_t)(run_end - run_first);
-            }
-            ++n;
-        }
+        rv565_frame_lines(&clip->header, &lines, &line_bytes);
+        return rv565_partial_runs(body, length, lines, line_bytes, runs, max_runs, count);
     }
     *count = n;
     return n <= max_runs ? RV565_OK : RV565_ERR_ARG;
@@ -528,16 +550,23 @@ static void build_band(uint8_t *out, const uint8_t *src, const uint8_t *res,
     }
 }
 
-static rv565_status_t decode_partial(const rv565_clip_t *clip, const uint8_t *body,
-                                     uint32_t length, const uint8_t *prev, uint8_t *dst,
-                                     uint8_t *scratch, size_t scratch_len)
+rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
+                                   uint16_t lines, size_t line_bytes, uint8_t codec,
+                                   const uint8_t *prev, uint8_t *dst,
+                                   uint8_t *scratch, size_t scratch_len)
 {
     partial_t p;
-    rv565_status_t status = partial_parse(&clip->header, body, length, &p);
+    if (prev == NULL || dst == NULL || codec >= RV565_CODECS) {
+        return RV565_ERR_ARG;
+    }
+    rv565_status_t status = partial_parse(lines, line_bytes, body, length, &p);
     if (status != RV565_OK) {
         return status;
     }
-    const int zlib = clip->header.codec == RV565_CODEC_ZLIB;
+    const int zlib = codec == RV565_CODEC_ZLIB;
+    if (!zlib && p.data_len != p.size) {
+        return RV565_ERR_RECORD;
+    }
     if (zlib && p.data_len == 0) {
         return RV565_ERR_INFLATE;
     }
@@ -610,7 +639,11 @@ rv565_status_t rv565_decode(const rv565_clip_t *clip, uint16_t i,
         return RV565_OK;
     }
     if (type == RV565_FRAME_PARTIAL) {
-        return decode_partial(clip, body, length, prev, dst, scratch, scratch_len);
+        uint16_t lines;
+        size_t line_bytes;
+        rv565_frame_lines(&clip->header, &lines, &line_bytes);
+        return rv565_apply_partial(body, length, lines, line_bytes, clip->header.codec,
+                                   prev, dst, scratch, scratch_len);
     }
     /* Delta. */
     if (clip->header.codec == RV565_CODEC_STORED) {
