@@ -58,6 +58,15 @@ _LENGTH = "<I"
 _CASET = 0x2A
 _RASET = 0x2B
 _RAMWR = 0x2C
+_MADCTL = 0x36
+
+# MADCTL values. CircuitPython rotates displayio in software and never
+# changes MADCTL, so after adafruit_st7789's init the controller still
+# addresses its RAM as 240 columns x 320 rows (MADCTL 0xC0). DirectPlayer
+# writes the controller directly, so for a landscape panel it must turn on
+# row/column exchange (MV) itself.
+MADCTL_LANDSCAPE = 0x60  # MV | MX: what the RV565 C and MicroPython benchmarks use
+MADCTL_ADAFRUIT_ST7789 = 0xC0  # adafruit_st7789's last init value (portrait)
 
 _builtin_open = open  # noqa: A001 - this module defines its own open()
 
@@ -312,8 +321,14 @@ class _Clock:
     """Seconds since the last reset(), as a float.
 
     CircuitPython floats have about 22 bits of mantissa, so absolute uptime in
-    seconds loses millisecond precision after an hour or so. Counting from the
-    start of each play() in integer nanoseconds keeps the values small.
+    seconds loses millisecond precision after an hour or so. The origin is
+    kept in integer nanoseconds and the play loop moves it forward with
+    :meth:`rebase` at every loop of the clip, so the floats it sees stay
+    within one clip's length even when ``loops=0`` plays for days.
+
+    Boards without ``time.monotonic_ns`` (no long integers) fall back to
+    ``time.monotonic()``, whose own value is absolute uptime as a float;
+    rebasing cannot restore precision it has already lost there.
     """
 
     def __init__(self):
@@ -327,6 +342,13 @@ class _Clock:
             import time  # pylint: disable=import-outside-toplevel
 
             self._t0 = time.monotonic()
+
+    def rebase(self, frames, fps):
+        """Move the origin forward by ``frames`` frames at ``fps``."""
+        if _monotonic_ns is not None:
+            self._t0 += frames * 1_000_000_000 // fps
+        else:
+            self._t0 += frames / fps
 
     def __call__(self):
         if _monotonic_ns is not None:
@@ -398,21 +420,36 @@ class _Pacer:
         """Play the clip at its frame rate, skipping frames that are late.
 
         :param loops: how many times to play the clip; 0 loops forever
-        :param start: first frame
+        :param start: first frame, ``0 <= start < len(clip)``
         :param on_frame: optional ``callback(index, stats)``; return ``False``
             to stop
         :return: :class:`PlayStats`
+        :raises IndexError: if ``start`` is not a frame of the clip
         """
         clip = self.clip
         n = len(clip)
+        if not 0 <= start < n:
+            raise IndexError("start frame %d out of range 0..%d" % (start, n - 1))
         fps = clip.fps
         total = n * loops - start if loops else None
         stats = PlayStats(fps)
-        if hasattr(self._clock, "reset"):
-            self._clock.reset()
-        t0 = self._clock()
-        position = 0  # frames since start on the clip's timeline
+        clock = self._clock
+        if hasattr(clock, "reset"):
+            clock.reset()
+        rebase = getattr(clock, "rebase", None)
+        t0 = clock()
+        played = 0.0  # seconds of timeline moved out of the clock by rebase
+        position = 0  # frames since t0 on the clip's timeline
         while total is None or position < total:
+            if rebase is not None and position >= n:
+                # Keep the clock's floats small on long runs: move its origin
+                # forward by whole clips and count from there.
+                shift = position // n * n
+                rebase(shift, fps)
+                position -= shift
+                if total is not None:
+                    total -= shift
+                played += shift / fps
             index = (start + position) % n
             decode_s, draw_s = self.show(index)
             stats.shown += 1
@@ -421,7 +458,7 @@ class _Pacer:
             if on_frame is not None and on_frame(index, stats) is False:
                 break
             position += 1
-            now = self._clock()
+            now = clock()
             due = int((now - t0) * fps)  # frame the timeline has reached
             if due > position:
                 # Behind: drop the frames that are already late.
@@ -433,7 +470,7 @@ class _Pacer:
                 wait = t0 + position / fps - now
                 if wait > 0:
                     self._sleep(wait)
-        stats.elapsed = self._clock() - t0
+        stats.elapsed = played + clock() - t0
         return stats
 
 
@@ -550,16 +587,30 @@ class DirectPlayer(_Pacer):
     alone: this class sets ``root_group = None`` and turns off
     ``auto_refresh``.
 
+    ``displayio`` rotation is a software transform: it never reaches the
+    controller, whose RAM stays 240 columns x 320 rows. So for a landscape
+    panel (``panel_width > panel_height``) :meth:`play` first sends MADCTL
+    ``madctl`` (default :data:`MADCTL_LANDSCAPE`, ``0x60``, as the RV565
+    benchmarks do), which makes the controller's columns run along the long
+    side; the address window is then in landscape coordinates. When play
+    ends, MADCTL is set back to ``restore_madctl`` so ``displayio`` can draw
+    again. A portrait panel sends no MADCTL unless ``madctl`` is given.
+
     :param clip: a :class:`Clip`
     :param bus: the ``fourwire.FourWire`` (CircuitPython 9+) or
         ``displayio.FourWire`` bus the display was created on
-    :param int panel_width: width of the panel in the current rotation
-    :param int panel_height: height of the panel in the current rotation
-    :param int x_offset: controller column offset for this module and rotation
-        (0 for 320x240 panels; 40 or 52/53 for 240x135 ones, depending on
-        rotation)
+    :param int panel_width: width of the panel as the clip should appear
+    :param int panel_height: height of the panel as the clip should appear
+    :param int x_offset: controller column offset for this module and MADCTL
+        (0 for 320x240 panels in the benchmarks; 40 or 52/53 for 240x135
+        ones, depending on orientation)
     :param int y_offset: controller row offset, likewise
     :param display: the display object, so it can be quieted while playing
+    :param madctl: MADCTL byte to send before playing; ``None`` picks
+        :data:`MADCTL_LANDSCAPE` for a landscape panel and nothing for a
+        portrait one. Use ``0xA0`` to turn a landscape picture upside down.
+    :param restore_madctl: MADCTL byte to send after playing, or ``None`` to
+        leave it; default :data:`MADCTL_ADAFRUIT_ST7789`
     """
 
     def __init__(
@@ -573,6 +624,8 @@ class DirectPlayer(_Pacer):
         display=None,
         clock=None,
         sleep=None,
+        madctl=None,
+        restore_madctl=MADCTL_ADAFRUIT_ST7789,
     ):
         super().__init__(clip, clock, sleep)
         if clip.width > panel_width or clip.height > panel_height:
@@ -580,6 +633,10 @@ class DirectPlayer(_Pacer):
                 "clip is %dx%d, larger than the %dx%d panel"
                 % (clip.width, clip.height, panel_width, panel_height)
             )
+        if madctl is None and panel_width > panel_height:
+            madctl = MADCTL_LANDSCAPE
+        self.madctl = madctl
+        self.restore_madctl = restore_madctl
         self.bus = bus
         self.display = display
         x0 = (panel_width - clip.width) // 2 + x_offset
@@ -588,7 +645,11 @@ class DirectPlayer(_Pacer):
         self._raset = struct.pack(">HH", y0, y0 + clip.height - 1)
 
     def show(self, i):
-        """Decode frame ``i`` and send it to the panel."""
+        """Decode frame ``i`` and send it to the panel.
+
+        Called on its own, outside :meth:`play`, it does not send MADCTL;
+        call :meth:`begin` first.
+        """
         clock = self._clock
         t0 = clock()
         frame = self.clip.frame(i)
@@ -599,11 +660,29 @@ class DirectPlayer(_Pacer):
         bus.send(_RAMWR, frame)
         return t1 - t0, clock() - t1
 
-    def play(self, loops=1, start=0, on_frame=None):
-        """Play at the clip's rate, skipping late frames."""
+    def begin(self):
+        """Take the panel from ``displayio`` and set MADCTL for streaming."""
         display = self.display
         if display is not None:
             display.root_group = None
             if hasattr(display, "auto_refresh"):
                 display.auto_refresh = False
-        return super().play(loops, start, on_frame)
+        if self.madctl is not None:
+            self.bus.send(_MADCTL, bytes((self.madctl,)))
+
+    def end(self):
+        """Put MADCTL back to ``restore_madctl`` (if MADCTL was changed)."""
+        if self.madctl is not None and self.restore_madctl is not None:
+            self.bus.send(_MADCTL, bytes((self.restore_madctl,)))
+
+    def play(self, loops=1, start=0, on_frame=None):
+        """Play at the clip's rate, skipping late frames.
+
+        Sends MADCTL before the first frame and restores it afterwards, also
+        when playing stops with an exception.
+        """
+        self.begin()
+        try:
+            return super().play(loops, start, on_frame)
+        finally:
+            self.end()

@@ -336,7 +336,67 @@ class PacingTest(unittest.TestCase):
         self.assertEqual(stats.shown, 50)
 
 
+    def test_start_must_be_a_frame(self):
+        clock = fakes.FakeClock()
+        player = _CountingPlayer(self.clip, clock, cost=0.001)
+        for start in (24, 100, -1):
+            with self.assertRaises(IndexError):
+                player.play(start=start)
+        self.assertEqual(player.indices, [])
+        stats = player.play(start=23)
+        self.assertEqual(player.indices, [23])
+        self.assertEqual(stats.shown, 1)
+
+    def test_rebase_keeps_clock_small_on_endless_play(self):
+        clock = _RebasingClock()
+        player = _CountingPlayer(self.clip, clock, cost=0.01)
+        stats = player.play(loops=0, on_frame=lambda i, s: s.shown < 24 * 10)
+        self.assertEqual(stats.shown, 240)
+        self.assertEqual(stats.skipped, 0)
+        self.assertEqual(player.indices, list(range(24)) * 10)
+        # Ten loops of a one-second clip, but the clock never reads past
+        # about one clip's length because play() moves its origin.
+        self.assertEqual(clock.rebased, [24] * 9)
+        self.assertLess(max(clock.readings), 1.1)
+        self.assertAlmostEqual(stats.elapsed, 10.0 - 1 / 24 + 0.01, places=6)
+
+    def test_rebase_with_skipping_and_finite_loops(self):
+        clock = _RebasingClock()
+        player = _CountingPlayer(self.clip, clock, cost=0.25)  # 4 FPS
+        stats = player.play(loops=3, start=5)
+        self.assertEqual(stats.shown + stats.skipped, 3 * 24 - 5)
+        self.assertEqual(player.indices[:4], [5, 11, 17, 23])
+        self.assertLess(max(clock.readings), 1.3)
+        self.assertAlmostEqual(stats.elapsed, stats.shown * 0.25, places=6)
+
+
+class _RebasingClock(fakes.FakeClock):
+    """A fake clock with _Clock's rebase(): records each origin shift."""
+
+    def __init__(self):
+        super().__init__()
+        self.rebased = []
+        self.readings = []
+
+    def __call__(self):
+        self.readings.append(self.now)
+        return self.now
+
+    def rebase(self, frames, fps):
+        self.rebased.append(frames)
+        self.now -= frames / fps
+
+
 class ClockTest(unittest.TestCase):
+    def test_rebase_moves_origin_in_whole_nanoseconds(self):
+        clock = rv565._Clock()
+        if rv565._monotonic_ns is not None:
+            t0 = clock._t0
+            clock.rebase(25, 24)
+            self.assertIsInstance(clock._t0, int)
+            self.assertEqual(clock._t0 - t0, 25 * 10**9 // 24)
+        self.assertLess(clock(), 0)  # origin is now in the future
+
     def test_default_clock_counts_from_reset(self):
         clock = rv565._Clock()
         first = clock()
@@ -372,12 +432,47 @@ class DirectPlayerTest(unittest.TestCase):
         self.assertEqual(stats.shown, 24)
         self.assertIsNone(display.root_group)
         self.assertFalse(display.auto_refresh)
-        self.assertEqual(len(bus.sent), 3 * 24)
-        caset, raset, ramwr = bus.sent[:3]
+        self.assertEqual(len(bus.sent), 3 * 24 + 2)
+        # displayio rotates in software, so the controller is put in
+        # landscape (MV) before streaming and back to adafruit_st7789's
+        # portrait MADCTL afterwards.
+        self.assertEqual(bus.sent[0], (0x36, b"\x60"))
+        self.assertEqual(bus.sent[-1], (0x36, b"\xc0"))
+        caset, raset, ramwr = bus.sent[1:4]
         self.assertEqual(caset, (0x2A, struct.pack(">HH", 70, 249)))
         self.assertEqual(raset, (0x2B, struct.pack(">HH", 52, 186)))
         self.assertEqual(ramwr, (0x2C, self.expected[0]))
-        self.assertEqual(bus.sent[-1], (0x2C, self.expected[23]))
+        self.assertEqual(bus.sent[-2], (0x2C, self.expected[23]))
+
+    def test_portrait_panel_sends_no_madctl(self):
+        bus = fakes.FourWire()
+        player = rv565.DirectPlayer(rv565.open(self.data), bus, 240, 320,
+                                    clock=fakes.FakeClock(),
+                                    sleep=lambda s: None)
+        player.play(loops=1, on_frame=lambda i, s: False)
+        self.assertEqual([c for c, _ in bus.sent], [0x2A, 0x2B, 0x2C])
+
+    def test_custom_madctl_and_no_restore(self):
+        bus = fakes.FourWire()
+        player = rv565.DirectPlayer(rv565.open(self.data), bus, 320, 240,
+                                    madctl=0xA0, restore_madctl=None,
+                                    clock=fakes.FakeClock(),
+                                    sleep=lambda s: None)
+        player.play(on_frame=lambda i, s: False)
+        self.assertEqual(bus.sent[0], (0x36, b"\xa0"))
+        self.assertEqual(bus.sent[-1][0], 0x2C)
+
+    def test_madctl_restored_after_error(self):
+        bus = fakes.FourWire()
+        player = rv565.DirectPlayer(rv565.open(self.data), bus, 320, 240)
+
+        def boom(i):
+            raise RuntimeError("stop")
+
+        player.show = boom
+        with self.assertRaises(RuntimeError):
+            player.play()
+        self.assertEqual(bus.sent, [(0x36, b"\x60"), (0x36, b"\xc0")])
 
     def test_offsets(self):
         bus = fakes.FourWire()

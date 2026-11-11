@@ -107,8 +107,14 @@ to a much slower per-pixel loop.
 already what an ST7789 expects, it sets the address window and sends each
 frame with one ``bus.send()``. It should be considerably faster, but it needs
 the display to be initialised first (for example by ``adafruit_st7789``) and
-takes the panel over while playing. Modules smaller than the controller's
-240x320 RAM need ``x_offset``/``y_offset`` for their rotation.
+takes the panel over while playing. ``displayio`` rotation is done in
+software and never reaches the controller, so for a landscape panel
+``DirectPlayer`` sets MADCTL to ``0x60`` (the value the RV565 C and
+MicroPython benchmarks use) before playing and back to ``0xC0``
+(``adafruit_st7789``'s value) afterwards; pass ``madctl=`` and
+``restore_madctl=`` for other orientations or drivers. Modules smaller than
+the controller's 240x320 RAM need ``x_offset``/``y_offset`` as well. This
+path has not yet been checked on hardware under CircuitPython.
 
 Examples
 --------

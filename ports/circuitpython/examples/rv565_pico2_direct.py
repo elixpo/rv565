@@ -33,7 +33,11 @@ bus = FourWire(
 display = ST7789(bus, width=320, height=240, rotation=90, backlight_pin=board.GP22)
 
 clip = rv565.open("/testpattern.rv565")
-# 320x240 modules need no controller offset in landscape.
+# displayio's rotation=90 is done in software, so DirectPlayer sets the
+# controller's MADCTL to landscape (0x60, as the RV565 Pico 2 benchmark does)
+# while playing and restores it afterwards. The benchmark's 320x240 module
+# needs no offset that way; if the picture is shifted, upside down or
+# mirrored on yours, pass x_offset/y_offset or madctl=0xA0.
 player = rv565.DirectPlayer(clip, bus, 320, 240, display=display)
 while True:
     print(player.play())

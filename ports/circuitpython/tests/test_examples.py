@@ -140,7 +140,15 @@ class ExamplesTest(unittest.TestCase):
         player = self.run_example(HERE.parent / "examples" / "rv565_pico2_direct.py")
         self.assertIsInstance(player, rv565.DirectPlayer)
         display = self.check_pico2_wiring()
-        self.assertEqual(len(display.bus.sent), 3 * 24)
+        sent = display.bus.sent
+        # MADCTL to landscape, 24 frames of CASET/RASET/RAMWR, MADCTL back;
+        # then the example's while loop starts play() again, which the test
+        # stops after its MADCTL, and MADCTL is restored on the way out.
+        landscape, portrait = (0x36, b"\x60"), (0x36, b"\xc0")
+        self.assertEqual(len(sent), 3 * 24 + 4)
+        self.assertEqual(sent[0], landscape)
+        self.assertEqual([c for c, _ in sent[1:73]], [0x2A, 0x2B, 0x2C] * 24)
+        self.assertEqual(sent[73:], [portrait, landscape, portrait])
 
 
 if __name__ == "__main__":
