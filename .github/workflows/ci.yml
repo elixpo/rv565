@@ -32,6 +32,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Tests without Pillow
         run: python3 -m unittest discover -s python/tests -v
+      - name: CircuitPython library (fake displayio)
+        run: python3 -m unittest discover -s ports/circuitpython/tests -v
       - name: Build, install with Pillow, test again
         run: |
           python3 -m venv /tmp/venv

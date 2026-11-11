@@ -3,6 +3,16 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## Unreleased
+
+- Experimental CircuitPython library, `ports/circuitpython/`
+  (`circuitpython_rv565`): reads version 6 files from a path, file object or
+  bytes with a lazily built frame index, inflates with the built-in `zlib`,
+  and plays through `displayio` (`Player`) or straight to an ST7789 over its
+  bus (`DirectPlayer`), paced to the clip's rate with frame skipping. Host
+  tests with CPython and fake `displayio`; not yet run on a board. Expect a
+  few FPS ([#30](https://github.com/elixpo/rv565/issues/30)).
+
 ## 1.2.0 — 2026-11-04
 
 - RP2350 cost model `RV565_COST_RP2350_180x135` (8.108 ms + 0.2446 µs/byte,

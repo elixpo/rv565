@@ -71,6 +71,7 @@ MicroPython-Class ESP32-S3 Systems*
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Measured: 24 FPS dual-core ([results](docs/RESULTS_RP2350.md); [against MJPEG](docs/RESULTS_MJPEG.md#raspberry-pi-pico-2-rp2350)) |
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Same code as the Pico SDK |
 | RP2040 (Pico) | as RP2350 | Compiles; not yet run on hardware |
+| CircuitPython (ESP32-S3, RP2350, ...) | copy `ports/circuitpython/circuitpython_rv565.py` to `CIRCUITPY/lib` ([guide](ports/circuitpython/README.rst)) | Experimental: pure Python, a few FPS; host-tested, not yet run on a board |
 | Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
 | Browser | [Online converter](https://oreo.elixpo.com/rv565/convert/) | No install, no upload |
 
@@ -117,6 +118,26 @@ library; with Pillow, `Image.open("clip.rv565")` opens clips as animations.
 See [python/](python/README.md). No Python? Use the
 [online converter](https://oreo.elixpo.com/rv565/convert/), which runs in the
 browser.
+
+## CircuitPython (experimental)
+
+No C toolchain? `ports/circuitpython/` is a pure-Python player for
+CircuitPython boards with `zlib` and `displayio`, such as ESP32-S3 boards and
+the Pico 2:
+
+```python
+import board
+import circuitpython_rv565 as rv565
+
+player = rv565.Player(rv565.open("/clip.rv565"), board.DISPLAY)
+print(player.play())   # paced to the clip's rate, late frames skipped
+```
+
+It will play at a few frames per second, not 24: inflating and drawing run
+one after the other in Python. It has passed host tests but not yet run on a
+board; see [its README](ports/circuitpython/README.rst) for setup, the Pico 2
+wiring and the experimental `DirectPlayer`, which writes frames straight to
+the ST7789.
 
 ## Quick start
 
@@ -170,6 +191,8 @@ src/                 portable core, player, and platform ports (Arduino src/)
 examples/            Arduino sketches (ESP32-S3, Pico 2)
 examples_idf/        ESP-IDF example project
 examples_pico/       Pico SDK example project
+ports/circuitpython/ CircuitPython library (experimental, pure Python)
+ports/micropython/   MicroPython user C module
 tools/rv565.py       encoder and inspection CLI
 tests/               host tests (make -C tests)
 benchmarks/          the paper's standalone ESP32-S3 benchmark and collectors
@@ -196,6 +219,8 @@ hardware. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 ```bash
 make -C tests                                    # host tests
 make -C tests CLIPS="w90.rv565 w360.rv565"       # plus your own containers
+python3 -m unittest discover -s python/tests     # Python package
+python3 -m unittest discover -s ports/circuitpython/tests   # CircuitPython library
 ```
 
 CI builds the Arduino sketches for ESP32-S3 and Pico 2, the ESP-IDF example,
