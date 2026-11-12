@@ -52,7 +52,10 @@ They add format version 7 support (and keep version 6):
 Built on 2026-11-12 on top of FFmpeg master `49a3b1f259`
 ("tests/fate/aac: test encoding a near-silent window ahead of an onset"),
 Linux x86-64, GCC, system zlib, `./configure --enable-zlib --disable-doc`.
-No compiler warnings in the RV565 files.
+No compiler warnings in the RV565 files. Then rebased onto master
+`23c4540053` ("avcodec/x86/vp9: convert tm_4x4_10/12 predictors MMXEXT to
+SSE2") without conflicts; after re-running `configure`, the full
+`make fate` and the 30 RV565 sample tests pass again.
 
 - Conformance vectors (`tests/data/v7`): all 53 valid files (every pixel
   format and codec, partial deltas, shifted bands, version 6) decode to the

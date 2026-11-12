@@ -1,4 +1,4 @@
-From 0f6825371bfd7478a97694d1a95bd27de7d667cd Mon Sep 17 00:00:00 2001
+From 81a7efe6e29f59c9394944ea47cf4b62ac3c7593 Mon Sep 17 00:00:00 2001
 From: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
 Date: Thu, 12 Nov 2026 01:23:02 +0530
 Subject: [PATCH 2/2] avformat: add RV565 demuxer and muxer
@@ -143,10 +143,10 @@ index 76427cf257..3b462945af 100644
  @item SAP                       @tab X @tab X
  @item SBG                       @tab   @tab X
 diff --git a/doc/muxers.texi b/doc/muxers.texi
-index a2489760fc..ef2d9a8c46 100644
+index 9343c21236..949c40a18a 100644
 --- a/doc/muxers.texi
 +++ b/doc/muxers.texi
-@@ -3497,6 +3497,20 @@ ffmpeg -f lavfi -i "movie=INPUT.mkv[out+subcc]" -map 0:s:0 -c:s copy -f rcwt CC.
+@@ -3504,6 +3504,20 @@ ffmpeg -f lavfi -i "movie=INPUT.mkv[out+subcc]" -map 0:s:0 -c:s copy -f rcwt CC.
  @end example
  @end itemize
  
@@ -168,7 +168,7 @@ index a2489760fc..ef2d9a8c46 100644
  @section segment, stream_segment, ssegment
  
 diff --git a/libavformat/Makefile b/libavformat/Makefile
-index 17da02eee7..bb650c3e11 100644
+index 1ccaad2733..388802b1e0 100644
 --- a/libavformat/Makefile
 +++ b/libavformat/Makefile
 @@ -558,6 +558,8 @@ OBJS-$(CONFIG_RTP_MUXER)                 += rtp.o         \
@@ -180,7 +180,7 @@ index 17da02eee7..bb650c3e11 100644
  OBJS-$(CONFIG_S337M_DEMUXER)             += s337m.o spdif.o
  OBJS-$(CONFIG_SAMI_DEMUXER)              += samidec.o subtitles.o
  OBJS-$(CONFIG_SAP_DEMUXER)               += sapdec.o
-@@ -807,6 +809,7 @@ TESTPROGS-$(CONFIG_IMF_DEMUXER)          += imf
+@@ -808,6 +810,7 @@ TESTPROGS-$(CONFIG_IMF_DEMUXER)          += imf
  TESTPROGS-$(CONFIG_MP3_MUXER)            += id3v2enc id3v2chap
  TESTPROGS-$(CONFIG_AU_MUXER)             += auenc
  TESTPROGS-$(CONFIG_MPEGTS_DEMUXER)       += mpegts_probe
@@ -856,10 +856,10 @@ index 0000000000..6a94bd4cee
 +    .write_trailer    = rv565_write_trailer,
 +};
 diff --git a/libavformat/tests/.gitignore b/libavformat/tests/.gitignore
-index b5fd1ff009..b49d967591 100644
+index c3afb57677..3251550324 100644
 --- a/libavformat/tests/.gitignore
 +++ b/libavformat/tests/.gitignore
-@@ -15,3 +15,4 @@
+@@ -16,3 +16,4 @@
  /seek_utils
  /http
  /ogg_pages
@@ -1203,10 +1203,10 @@ index 6a80f3ac4e..e063e12b98 100644
  
  #define LIBAVFORMAT_VERSION_INT AV_VERSION_INT(LIBAVFORMAT_VERSION_MAJOR, \
 diff --git a/tests/Makefile b/tests/Makefile
-index 365c6e7c19..585a0c1b75 100644
+index 31be08007a..fce21112e4 100644
 --- a/tests/Makefile
 +++ b/tests/Makefile
-@@ -260,6 +260,7 @@ include $(SRC_PATH)/tests/fate/qt.mak
+@@ -261,6 +261,7 @@ include $(SRC_PATH)/tests/fate/qt.mak
  include $(SRC_PATH)/tests/fate/qtrle.mak
  include $(SRC_PATH)/tests/fate/real.mak
  include $(SRC_PATH)/tests/fate/rtsp.mak
@@ -1235,10 +1235,10 @@ index 5f281bd0fe..9d3eb0e347 100644
  fate-lavf-yuv444p.y4m: CMD = lavf_video "-pix_fmt yuv444p"
  fate-lavf-yuv411p.y4m: CMD = lavf_video "-pix_fmt yuv411p"
 diff --git a/tests/fate/libavformat.mak b/tests/fate/libavformat.mak
-index 6daa10df86..16f3b5bc5b 100644
+index 70d5439437..2ad3f28baf 100644
 --- a/tests/fate/libavformat.mak
 +++ b/tests/fate/libavformat.mak
-@@ -14,6 +14,10 @@ FATE_LIBAVFORMAT-$(call ALLYES, AU_MUXER AU_DEMUXER) += fate-auenc
+@@ -18,6 +18,10 @@ FATE_LIBAVFORMAT-$(call ALLYES, AU_MUXER AU_DEMUXER) += fate-auenc
  fate-auenc: libavformat/tests/auenc$(EXESUF)
  fate-auenc: CMD = run libavformat/tests/auenc$(EXESUF)
  

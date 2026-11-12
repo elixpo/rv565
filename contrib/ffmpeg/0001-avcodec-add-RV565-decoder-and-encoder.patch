@@ -1,4 +1,4 @@
-From 8b2545bb7eb942c7d847b3c4f87776c74fd5738d Mon Sep 17 00:00:00 2001
+From 1debd63595f8a793ce1d02c900f6341888d0cdf6 Mon Sep 17 00:00:00 2001
 From: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
 Date: Thu, 12 Nov 2026 01:23:02 +0530
 Subject: [PATCH 1/2] avcodec: add RV565 decoder and encoder
@@ -66,7 +66,7 @@ Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
  create mode 100644 libavcodec/rv565enc.c
 
 diff --git a/configure b/configure
-index c37cedbbe0..f65ac3b2a6 100755
+index 0db2edd57d..f694571f10 100755
 --- a/configure
 +++ b/configure
 @@ -3268,6 +3268,8 @@ rv20_encoder_select="h263_encoder"
@@ -191,7 +191,7 @@ index 0176cd0875..76427cf257 100644
  @item Screenpresso           @tab     @tab  X
  @item Screen Recorder Gold Codec  @tab     @tab  X
 diff --git a/libavcodec/Makefile b/libavcodec/Makefile
-index 4bffc08118..684fb597ab 100644
+index f12ad9c8e8..062b55e6dc 100644
 --- a/libavcodec/Makefile
 +++ b/libavcodec/Makefile
 @@ -698,6 +698,8 @@ OBJS-$(CONFIG_RV20_ENCODER)            += rv20enc.o
