@@ -18,9 +18,8 @@ bands for partial deltas, none for repeats. On the ESP32-S3 and RP2350 the
 transfer, not the decoder, bounds the frame time (31.3 and 33.4 ms of the
 41.7 ms budget at 24 FPS).
 
-These are file sizes and traffic counts. Decode and playback timings of
-version 7 on hardware have not been measured yet, so nothing here claims a
-frame rate.
+Playback was then measured on the Oreo Badge (see
+[On the badge](#on-the-badge-esp32-s3)).
 
 ## Results
 
@@ -89,6 +88,52 @@ What this shows:
   frame, and its block motion compensation and AVI container are more work
   for a microcontroller than RV565's band copies.
 
+## On the badge (ESP32-S3)
+
+Measured 2026-11-12 on the Oreo Badge: ESP32-S3 N16R8 at 240 MHz, 2.0"
+320x240 ST7789 on SPI at 40 MHz, ESP-IDF 5.5.1, with
+[`benchmarks/esp32s3_v7_player`](../benchmarks/esp32s3_v7_player) (the
+library's player and ESP32 port, ROM `tinfl`). Each clip is the 180x135,
+24 FPS, 240-frame clip above, lossless, scaled to the full panel. The
+`_full` clips are the same video encoded with `--band-lines 0`, so every
+changed frame is sent whole (and, having no partial deltas, no band shifts
+either, which is why `ui_full` is a larger file). Figures are per frame,
+from passes 2–4 of four (pass 1 includes start-up; all four agree within
+0.05 ms). The frame budget at 24 FPS is 41.67 ms.
+
+| Clip | Mode | Frame work mean (max) | Transfer mean | Decode mean | Rows sent | Late / skipped |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| UI | dual-core | **14.84 ms** (31.48) | 14.82 ms | 1.76 ms | 44.3% | 0 / 0 |
+| UI, `--band-lines 0` | dual-core | 31.36 ms (31.44) | 31.35 ms | 3.04 ms | 100% | 0 / 0 |
+| UI | serial | **16.59 ms** (34.70) | 14.82 ms | 1.76 ms | 44.3% | 0 / 0 |
+| UI, `--band-lines 0` | serial | 34.40 ms (34.68) | 31.35 ms | 3.04 ms | 100% | 0 / 0 |
+| W90 | dual-core | **27.50 ms** (31.44) | 27.47 ms | 3.63 ms | 86.9% | 0 / 0 |
+| W90, `--band-lines 0` | dual-core | 31.36 ms (31.44) | 31.35 ms | 3.87 ms | 100% | 0 / 0 |
+| W90 | serial | **31.11 ms** (41.42) | 27.47 ms | 3.63 ms | 86.9% | 0 / 0 |
+| W90, `--band-lines 0` | serial | 35.23 ms (41.39) | 31.35 ms | 3.88 ms | 100% | 0 / 0 |
+
+What this shows:
+
+- **Partial deltas cut the frame time by the rows they do not send.** On the
+  UI clip the mean frame takes 14.8 ms instead of 31.4 ms dual-core, and
+  16.6 ms instead of 34.4 ms serial: 2.1× less, matching the 44% of rows
+  sent. On film (W90) it is 12% less in both modes. The transfer is the
+  frame time in dual-core mode, as in the paper, and partial deltas are the
+  only thing here that shortens it.
+- **The maximum is still a whole frame:** keyframes (one per second here)
+  and frames that change everywhere send all 240 rows, so the worst frame is
+  unchanged. Partial deltas lower the average load, freeing the bus and the
+  CPU for the rest of the application, not the worst case.
+- **Decode is short:** 3.6 ms per W90 frame (1.8 ms on the UI clip), against
+  8.9 ms for the same frames as version 6 and 4.4–6.3 ms for MJPEG q5–q2
+  with Espressif's SIMD decoder, both measured with the paper's benchmark in
+  [`RESULTS_MJPEG.md`](RESULTS_MJPEG.md). That benchmark is a different
+  firmware, so take the comparison as indicative: the version 7 bodies are
+  4–6× smaller, and inflate time is linear in the body.
+- **Every clip played every frame on time** in both modes, including W90
+  serial, whose worst frame (41.4 ms, a keyframe) is just inside the budget.
+  In the paper, version 6 W90 serial took 40.2 ms per frame on average.
+
 ## Reproduce
 
 ```bash
@@ -105,10 +150,14 @@ ffmpeg -i ui.mkv -vf format=rgb565le -c:v zmbv -g 24 -compression_level 9 ui_zmb
 For W90 and W360 add the same `fps`, `scale` and `crop` filter to the ZMBV
 command as `tools/measure_v7.py` uses.
 
+On the badge:
+
+```bash
+benchmarks/esp32s3_v7_player/run.sh ui.rv565 1        # dual-core
+benchmarks/esp32s3_v7_player/run.sh ui_full.rv565 0   # serial, --band-lines 0
+```
+
 ## Not measured yet
 
-- Decode time and playback of version 7 on the ESP32-S3 and RP2350. A delta
-  adds one XOR pass over the frame and a partial delta one over its changed
-  bands, against an inflate of a body that is several times smaller; a
-  shifted band adds a copy of its rows.
-- What partial deltas save in transfer time and power on a real panel.
+- Version 7 playback on the RP2350 (Pico 2), and with tolerance above 0.
+- Power: partial deltas leave the SPI bus idle for part of each frame.
