@@ -3,7 +3,7 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
-## Unreleased
+## 2.0.0 — 2026-11-12
 
 Version 2.0.0 introduces RV565 format version 7 (`docs/FORMAT.md`): the
 header declares one of nine pixel formats (`rgb565be`, `rgb565le`, `rgb444`,
@@ -42,8 +42,12 @@ a small residual. Version 6 files stay readable everywhere.
   5.5× (W90) and 2.1× (W360) smaller than version 6; at tolerance 8 the W90
   clip is 2.3× smaller than MJPEG q2 at 5.4 dB better; the UI clip is
   lossless at 6% of MJPEG q2's size and sends 44% of the rows. MJPEG stays
-  smaller on high-motion film, and ZMBV on the UI clip. Playback on hardware
-  is not measured yet.
+  smaller on high-motion film, and ZMBV on the UI clip.
+- `benchmarks/esp32s3_v7_player`: version 7 playback on the Oreo Badge
+  (ESP32-S3, ST7789 at 40 MHz). Partial deltas cut the mean frame time of
+  the UI clip from 31.4 to 14.8 ms dual-core (34.4 to 16.6 ms serial) and of
+  the W90 film window by 12%; every clip played every frame on time, and W90
+  decodes in 3.6 ms per frame.
 - `contrib/ffmpeg`: the FFmpeg decoder, demuxer and muxer read and validate
   partial deltas with shifted bands, and the encoder writes them
   (`-band_lines`, `-motion_range`) and takes `-tolerance`, byte-identical to
