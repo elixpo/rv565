@@ -335,6 +335,8 @@ OreoOS under MIT.
 - An Arduino_GFX example: [Arduino_GFX #823](https://github.com/moononournation/Arduino_GFX/pull/823)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
+- An `lv_rv565` widget for LVGL, modelled on `lv_gif`:
+  [LVGL forum discussion](https://forum.lvgl.io/t/interest-in-a-lossless-low-ram-video-widget-for-mcus-rv565-like-lv-gif/24490)
 - A proposed article for the Espressif Developer Portal:
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)
 - Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67),
