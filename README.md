@@ -24,10 +24,13 @@ independent zlib stream of RGB565, still play.
   and DMA-transfers the current one, so frame time equals the display
   transfer (98.1% of the SPI bound on both).
 - **Small, exact files**: with deltas and one keyframe per second, the
-  paper's two film windows are 1.8–5.5× smaller than in version 6, still
-  pixel-exact; on one of them the file is smaller than MJPEG at its best
-  quality ([file sizes](docs/RESULTS_V7.md); version 7 playback timings are
-  not measured yet).
+  paper's two film windows are 2.1–5.5× smaller than in version 6, still
+  pixel-exact, and a UI animation is lossless at 6% of MJPEG's size
+  ([results](docs/RESULTS_V7.md)).
+- **Only changed rows go to the display**: partial deltas send just the bands
+  that changed. On the Oreo Badge (ESP32-S3) that halved the mean frame time
+  of a UI animation, 31.4 → 14.8 ms, and cut film by 12%, with every frame on
+  time ([measurements](docs/RESULTS_V7.md#on-the-badge-esp32-s3)).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.
