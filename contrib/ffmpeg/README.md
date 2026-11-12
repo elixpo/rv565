@@ -49,7 +49,7 @@ They add format version 7 support (and keep version 6):
 
 ## Tested
 
-Built on 2026-11-12 on top of FFmpeg master `49a3b1f259`
+Built on 2026-11-12 on top of FFmpeg master `49a3b1f259`, then rebased onto master `23c4540053` (no conflicts; `configure --enable-zlib --disable-doc`, full `make fate` and the RV565 sample tests pass again)
 ("tests/fate/aac: test encoding a near-silent window ahead of an onset"),
 Linux x86-64, GCC, system zlib, `./configure --enable-zlib --disable-doc`.
 No compiler warnings in the RV565 files.
