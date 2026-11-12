@@ -12,6 +12,15 @@
 //                                         in place (prev is frame) needs a
 //                                         scratch buffer of len(frame) bytes
 //   xor_frame(frame, other)               frame ^= other (stored deltas)
+//   apply_partial(body, frame, line_bytes, zlib[, scratch])
+//                                         partial delta (frame type 3), in
+//                                         place: frame's changed bands become
+//                                         their shifted prediction XOR the
+//                                         residual; a zlib body needs a scratch
+//                                         buffer (len(frame) bytes is always
+//                                         enough). Returns the changed line
+//                                         runs as a list of (first, count), to
+//                                         send only those rows to the display.
 //
 // A repeat frame needs nothing: the previous frame is already decoded.
 // Every function raises ValueError unless the body inflates to exactly
@@ -21,7 +30,9 @@
 #include <stdint.h>
 
 #include "py/runtime.h"
+#include "py/obj.h"
 #include "miniz.h"
+#include "rv565.h"
 
 static void inflate_exact(const mp_buffer_info_t *src, void *dst, size_t len) {
     if (src->len == 0 || len == 0) {
@@ -110,6 +121,50 @@ static MP_DEFINE_CONST_FUN_OBJ_2(
     oreo_rv565_xor_frame
 );
 
+static mp_obj_t oreo_rv565_apply_partial(size_t n_args, const mp_obj_t *args) {
+    mp_buffer_info_t body, frame, scratch = {0};
+    mp_get_buffer_raise(args[0], &body, MP_BUFFER_READ);
+    mp_get_buffer_raise(args[1], &frame, MP_BUFFER_WRITE);
+    const mp_int_t line_bytes = mp_obj_get_int(args[2]);
+    const int zlib = mp_obj_is_true(args[3]);
+    if (n_args > 4) {
+        mp_get_buffer_raise(args[4], &scratch, MP_BUFFER_WRITE);
+    }
+    if (line_bytes <= 0 || frame.len % (size_t)line_bytes != 0 ||
+            frame.len / (size_t)line_bytes > 0xFFFF) {
+        mp_raise_ValueError(MP_ERROR_TEXT("RV565 frame is not whole lines"));
+    }
+    const uint16_t lines = (uint16_t)(frame.len / (size_t)line_bytes);
+    rv565_status_t st = rv565_apply_partial(
+        body.buf, (uint32_t)body.len, lines, (size_t)line_bytes,
+        zlib ? RV565_CODEC_ZLIB : RV565_CODEC_STORED,
+        frame.buf, frame.buf, scratch.buf, scratch.len);
+    if (st != RV565_OK) {
+        mp_raise_ValueError(st == RV565_ERR_ARG
+            ? MP_ERROR_TEXT("RV565 partial delta needs a scratch buffer")
+            : MP_ERROR_TEXT("invalid RV565 partial delta"));
+    }
+    /* The changed runs: count them, then fill a temporary array. */
+    size_t count = 0;
+    rv565_partial_runs(body.buf, (uint32_t)body.len, lines, (size_t)line_bytes, NULL, 0, &count);
+    rv565_line_run_t *runs = m_new(rv565_line_run_t, count);
+    rv565_partial_runs(body.buf, (uint32_t)body.len, lines, (size_t)line_bytes, runs, count, &count);
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    for (size_t k = 0; k < count; ++k) {
+        mp_obj_t pair[2] = {
+            MP_OBJ_NEW_SMALL_INT(runs[k].first),
+            MP_OBJ_NEW_SMALL_INT(runs[k].count),
+        };
+        mp_obj_list_append(list, mp_obj_new_tuple(2, pair));
+    }
+    m_del(rv565_line_run_t, runs, count);
+    return list;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    oreo_rv565_apply_partial_obj, 4, 5,
+    oreo_rv565_apply_partial
+);
+
 static const mp_rom_map_elem_t oreo_rv565_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__oreo_rv565)},
     {MP_ROM_QSTR(MP_QSTR_FORMAT_VERSION), MP_ROM_INT(7)},
@@ -119,6 +174,8 @@ static const mp_rom_map_elem_t oreo_rv565_module_globals_table[] = {
      MP_ROM_PTR(&oreo_rv565_inflate_delta_obj)},
     {MP_ROM_QSTR(MP_QSTR_xor_frame),
      MP_ROM_PTR(&oreo_rv565_xor_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_apply_partial),
+     MP_ROM_PTR(&oreo_rv565_apply_partial_obj)},
 };
 static MP_DEFINE_CONST_DICT(
     oreo_rv565_module_globals,

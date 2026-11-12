@@ -74,6 +74,13 @@ static void begin_frame(void *)
     lcd.setAddrWindow(0, 0, lcd.width(), lcd.height());
 }
 
+// Partial deltas: only the rows that changed are sent.
+static void begin_rows(void *, uint16_t first_row, uint16_t rows)
+{
+    lcd.startWrite();
+    lcd.setAddrWindow(0, first_row, lcd.width(), rows);
+}
+
 static void queue_stripe(void *, const uint8_t *data, size_t length)
 {
     // swap565_t is big-endian RGB565, the byte order RV565 stripes use.
@@ -121,6 +128,7 @@ void setup()
 
     player.display.ctx = NULL;
     player.display.begin_frame = begin_frame;
+    player.display.begin_rows = begin_rows;
     player.display.queue_stripe = queue_stripe;
     player.display.wait_stripe = wait_stripe;
     player.display.end_frame = end_frame;

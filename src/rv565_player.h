@@ -13,7 +13,9 @@
  * Delta and repeat frames (format version 7): the two frame buffers
  * ping-pong, so a delta decodes into the buffer that is not on screen with
  * the presented frame as its base, and a repeat decodes nothing and is not
- * sent to the display again. When the pacer skips frames, the player
+ * sent to the display again. For a partial delta the player sends only the
+ * panel rows scaled from its changed lines, through the display's row window
+ * (begin_rows); keyframes and full deltas send the whole frame. When the pacer skips frames, the player
  * applies the skipped records it needs (at most K-1 after a keyframe)
  * without displaying them.
  *
@@ -39,6 +41,10 @@ typedef struct {
     void (*wait_stripe)(void *ctx);
     /* Finish the write (release chip select). */
     void (*end_frame)(void *ctx);
+    /* Optional: start a write of panel rows first_row .. first_row+rows-1,
+     * full width (row window and RAMWR); begin_frame must then restore the
+     * full window. NULL makes the player send whole frames only. */
+    void (*begin_rows)(void *ctx, uint16_t first_row, uint16_t rows);
 } rv565_display_ops_t;
 
 /* Optional decoder backend. The player always passes prev != dst, so a
@@ -62,11 +68,21 @@ typedef struct {
     uint32_t inflate_us;  /* decode time of the presented frame (and any catch-up) */
     uint32_t scale_us;    /* cumulative stripe scaling */
     uint32_t wait_us;     /* cumulative wait for DMA */
-    uint32_t transfer_us; /* whole display write (0 if not sent) */
+    uint32_t transfer_us; /* display writes (0 if nothing was sent) */
     uint32_t work_us;     /* frame work on the critical path */
     uint16_t decoded;     /* records decoded on the critical path */
-    uint8_t  sent;        /* 1 if the frame went to the display; 0 if unchanged */
+    uint16_t rows_sent;   /* panel rows transferred: panel_height, fewer, or 0 */
 } rv565_frame_stats_t;
+
+/* Changed-line runs the player turns into row windows per frame; a partial
+ * delta with more runs is sent whole. */
+#ifndef RV565_PLAYER_MAX_RUNS
+#define RV565_PLAYER_MAX_RUNS 16
+#endif
+/* After a skip of more frames than this, the next frame is sent whole. */
+#ifndef RV565_PLAYER_MAX_CATCHUP
+#define RV565_PLAYER_MAX_CATCHUP 64
+#endif
 
 typedef struct {
     /* Configuration: fill before rv565_player_init(). */
@@ -76,7 +92,7 @@ typedef struct {
     uint16_t stripe_rows;           /* rows per stripe, e.g. 24 */
     uint8_t *stripes[2];            /* DMA-capable, panel_width*stripe_rows*2 each */
     /* Decoded frames, rv565_frame_bytes() each. frames[1] is required for
-     * overlap and for clips with zlib deltas; otherwise it may be NULL. */
+     * overlap and for clips with zlib (partial) deltas; otherwise NULL is fine. */
     uint8_t *frames[2];
     uint16_t *xmap;                 /* panel_width entries */
     uint16_t *ymap;                 /* panel_height entries */
@@ -87,15 +103,14 @@ typedef struct {
     /* State. */
     int current;                    /* buffer holding the presented frame */
     int32_t held[2];                /* source frame in each buffer, -1 if none */
-    uint32_t gen[2];                /* bumped whenever a buffer is rewritten */
-    int sent;                       /* buffer last sent to the display, -1 if none */
-    uint32_t sent_gen;              /* its gen[] when it was sent */
+    int32_t shown;                  /* source frame on the panel, -1 if unknown */
     uint32_t ready_inflate_us;      /* decode time of the prefetched frame */
 } rv565_player_t;
 
 /* Validate the configuration and build the scaling maps. Returns
  * RV565_ERR_UNSUPPORTED for pixel formats other than RGB565 big-endian, and
- * RV565_ERR_ARG if the clip has zlib deltas and frames[1] is NULL. */
+ * RV565_ERR_ARG if the clip has zlib deltas or partial deltas and frames[1]
+ * is NULL. */
 rv565_status_t rv565_player_init(rv565_player_t *p);
 
 /* Present one source frame and, with a decoder backend, prefetch the next. */

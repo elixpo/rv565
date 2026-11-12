@@ -196,11 +196,13 @@ for (;;) {
 ```
 
 Leave `player.decoder` empty to use the single-core serial path. The player
-plays RGB565 big-endian clips, version 7 (keyframes, XOR deltas and repeats,
-zlib or stored) and version 6; it needs `player.frames[1]` for dual-core
-decoding and for clips with zlib deltas, sends nothing for a repeat frame,
-and returns `RV565_ERR_UNSUPPORTED` for other pixel formats, since the
-bundled ST7789 drivers run the panel in RGB565.
+plays RGB565 big-endian clips, version 7 (keyframes, XOR deltas, partial
+deltas and repeats, zlib or stored) and version 6; it needs
+`player.frames[1]` for dual-core decoding and for clips with zlib deltas or
+partial deltas, sends nothing for a repeat frame and only the changed rows
+of a partial delta (through the display's `begin_rows` row window, which the
+bundled ports provide), and returns `RV565_ERR_UNSUPPORTED` for other pixel
+formats, since the bundled ST7789 drivers run the panel in RGB565.
 
 For any of the nine pixel formats (your own display code, or a monochrome
 OLED), decode frames yourself:
@@ -209,8 +211,10 @@ OLED), decode frames yourself:
 uint8_t *frame = ..., *scratch = ...;   // rv565_frame_bytes(&clip.header) each
 rv565_seek(&clip, 0, frame, size, scratch, size);            // frame 0
 for (uint16_t i = 1; i < clip.header.frames; ++i) {
-    // in place; scratch is used only for zlib deltas
+    // in place; scratch is used only for zlib deltas and partial deltas
     rv565_decode(&clip, i, frame, frame, size, scratch, size);
+    // rv565_changed_lines(&clip, i, runs, max_runs, &count) says which
+    // lines (rows, or pages for mono_vpage) to send to the display
 }
 ```
 

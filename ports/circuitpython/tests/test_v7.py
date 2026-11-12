@@ -14,6 +14,7 @@ to_rgb888.
 
 import hashlib
 import importlib.util
+import io
 import json
 import random
 import struct
@@ -104,6 +105,50 @@ class ConformanceTest(unittest.TestCase):
                                              item["frame_sha256"][i],
                                              "frame %d" % i)
 
+    def test_changed_lines_of_every_valid_vector(self):
+        for item in MANIFEST["valid"]:
+            with self.subTest(item["file"]):
+                for source in (vector(item["file"]), str(V7 / item["file"])):
+                    with rv565.open(source) as clip:
+                        got = [[list(run) for run in clip.changed_lines(i)]
+                               for i in range(len(clip))]
+                        self.assertEqual(got, item["changed_lines"])
+
+    def test_partial_vectors_cover_every_format_and_codec(self):
+        partial = [item for item in MANIFEST["valid"] if "partial" in item["frame_types"]]
+        self.assertEqual({(i["pixel_format"], i["codec"]) for i in partial},
+                         {(f, c) for f in rv565.PIXEL_FORMATS for c in rv565.CODECS})
+
+    def test_shift_vectors_shift(self):
+        shifted = 0
+        for item in MANIFEST["valid"]:
+            if "shift" not in item["file"]:
+                continue
+            clip = rv565.open(vector(item["file"]))
+            for i in range(len(clip)):
+                if clip.frame_type(i) == "partial":
+                    offset, length = clip._span(i)
+                    shifts = clip._layout(offset, length)[2]
+                    shifted += any(shifts)
+        self.assertGreater(shifted, 0)
+
+    def test_shifted_band_matches_reference_prediction(self):
+        # Every (dx, dy) on a 3-line band of 5-byte lines, including shifts
+        # past the line and the band, against the reference's _predict.
+        rng = random.Random(5)
+        clip = rv565.open(vector("gray8_zlib_k4.rv565"))
+        clip.line_bytes = 5
+        prev = bytes(rng.randrange(256) for _ in range(30))
+        residual = bytes(rng.randrange(256) for _ in range(15))
+        for dx in range(-7, 8):
+            for dy in range(-2, 3):
+                frame = bytearray(prev)
+                clip._decode_band(frame, residual, 0, 2, 5, dx, dy)
+                pred = REFERENCE._predict(prev, 2, 5, 5, dx, dy)
+                want = bytes(a ^ b for a, b in zip(pred, residual))
+                self.assertEqual(bytes(frame[10:25]), want, (dx, dy))
+                self.assertEqual(frame[:10] + frame[25:], prev[:10] + prev[25:])
+
     def test_every_invalid_vector_is_rejected_at_its_stage(self):
         for item in MANIFEST["invalid"]:
             with self.subTest(item["file"]):
@@ -130,7 +175,9 @@ class ConformanceTest(unittest.TestCase):
         try:
             for name in ("rgb565be_zlib_forced_delta_k8.rv565",
                          "rgb444_stored_forced_delta_k8.rv565",
-                         "mono_zlib_k4.rv565"):
+                         "mono_zlib_k4.rv565",
+                         "rgb666_stored_partial_k5.rv565",
+                         "mono_vpage_zlib_partial_k5.rv565"):
                 item = entry(name)
                 clip = rv565.open(vector(name))
                 self.assertEqual([sha(f) for f in clip], item["frame_sha256"])
@@ -177,11 +224,19 @@ class ConformanceTest(unittest.TestCase):
 
     def test_index_rules(self):
         cases = {
-            "invalid_frame_type_3.rv565": "frame type 3",
+            "invalid_frame_type_4.rv565": "frame type 4",
             "invalid_first_frame_delta.rv565": "frame 0 must be a keyframe",
             "invalid_missing_keyframe.rv565": "must be a keyframe",
             "invalid_repeat_with_body.rv565": "has a body",
             "invalid_stored_wrong_size.rv565": "stored frame",
+            "invalid_partial_band_0.rv565": "band height 0",
+            "invalid_partial_short_mask.rv565": "too short for its band mask",
+            "invalid_partial_no_band.rv565": "no changed band",
+            "invalid_partial_band_past_end.rv565": "past the frame",
+            "invalid_partial_stored_wrong_size.rv565": "stored partial frame",
+            "invalid_partial_at_keyframe.rv565": "must be a keyframe",
+            "invalid_partial_short_shifts.rv565": "too short for its band shifts",
+            "invalid_partial_shift_dy_too_far.rv565": "more than it has",
         }
         for name, message in cases.items():
             with self.subTest(name):
@@ -233,7 +288,16 @@ class V7PlayerTest(unittest.TestCase):
                 ("gray8_zlib_k4.rv565", None),
                 ("gray4_stored_k3.rv565", None),
                 ("mono_zlib_k4.rv565", None),
-                ("mono_stored_forced_delta_k8.rv565", None)):
+                ("mono_stored_forced_delta_k8.rv565", None),
+                ("rgb565be_zlib_partial_k5.rv565", "RGB565_SWAPPED"),
+                ("rgb565le_stored_partial_k5.rv565", "RGB565"),
+                ("gray8_stored_partial_k5.rv565", None),
+                ("gray4_zlib_partial_k5.rv565", None),
+                ("mono_zlib_partial_k5.rv565", None),
+                ("rgb565be_zlib_shift_k10.rv565", "RGB565_SWAPPED"),
+                ("rgb565le_stored_shift_k10.rv565", "RGB565"),
+                ("gray4_zlib_shift_k10.rv565", None),
+                ("mono_zlib_shift_k10.rv565", None)):
             with self.subTest(name):
                 item = entry(name)
                 player = rv565.Player(rv565.open(vector(name)), fakes.Display())
@@ -342,6 +406,222 @@ class V7DirectPlayerTest(unittest.TestCase):
         with self.assertRaisesRegex(rv565.RV565Error, "rgb565be and rgb666"):
             rv565.DirectPlayer(rv565.open(vector("gray8_zlib_k4.rv565")),
                                fakes.FourWire(), 320, 240)
+
+
+# -- partial deltas on a clip with a small moving square -------------------
+
+W, H = 40, 32
+
+
+def square_frames(fmt, count=12):
+    """A 4x4 white square moving over grey; frames 3 and 4 are equal."""
+    frames = []
+    for n in range(count):
+        k = min(n, 3) if n < 5 else n - 1
+        rgb = bytearray(b"\x40\x40\x40" * (W * H))
+        for y in range(2 + 2 * k, 6 + 2 * k):
+            for x in range(3 * k, 3 * k + 4):
+                p = 3 * (y * W + x)
+                rgb[p:p + 3] = b"\xff\xff\xff"
+        frames.append(REFERENCE.convert(bytes(rgb), W, H, fmt))
+    return frames
+
+
+def square_clip(fmt="rgb565be", codec="zlib"):
+    frames = square_frames(fmt)
+    out = io.BytesIO()
+    REFERENCE.write(out, W, H, 12, frames, pixel_format=fmt, codec=codec,
+                    keyframe_interval=30, band_lines=4)
+    return out.getvalue(), frames
+
+
+class FakePanel:
+    """Interprets CASET/RASET/RAMWR from a fake bus into a panel's memory."""
+
+    def __init__(self, width, height, bpp):
+        self.width, self.bpp = width, bpp
+        self.ram = bytearray(width * height * bpp)
+        self.window = None
+
+    def run(self, sent):
+        cols = rows = None
+        for cmd, data in sent:
+            if cmd == 0x2A:
+                cols = struct.unpack(">HH", data)
+            elif cmd == 0x2B:
+                rows = struct.unpack(">HH", data)
+            elif cmd == 0x2C:
+                x0, x1 = cols
+                y0, y1 = rows
+                w = x1 - x0 + 1
+                assert len(data) == w * (y1 - y0 + 1) * self.bpp
+                for y in range(y0, y1 + 1):
+                    o = (y - y0) * w * self.bpp
+                    p = (y * self.width + x0) * self.bpp
+                    self.ram[p:p + w * self.bpp] = data[o:o + w * self.bpp]
+
+    def region(self, x0, y0, w, h):
+        out = bytearray()
+        for y in range(y0, y0 + h):
+            p = (y * self.width + x0) * self.bpp
+            out += self.ram[p:p + w * self.bpp]
+        return bytes(out)
+
+
+class PartialTest(unittest.TestCase):
+    def setUp(self):
+        fakes.install()
+
+    def tearDown(self):
+        fakes.uninstall()
+
+    def test_clip_has_small_partials(self):
+        data, frames = square_clip()
+        clip = rv565.open(data)
+        types = [clip.frame_type(i) for i in range(len(clip))]
+        self.assertEqual(types[0], "key")
+        self.assertIn("partial", types)
+        self.assertIn("repeat", types)
+        for i, t in enumerate(types):
+            if t == "partial":
+                rows = sum(c for _, c in clip.changed_lines(i))
+                self.assertLessEqual(rows, 12, "frame %d" % i)
+        self.assertEqual([bytes(f) for f in clip], frames)
+
+    def test_dirty_lines_union_and_seeks(self):
+        data, frames = square_clip()
+        clip = rv565.open(data)
+        n = len(clip)
+        for since in [None] + list(range(n)):
+            for i in range(n):
+                runs = clip.dirty_lines(since, i)
+                rows = set()
+                for first, count in runs:
+                    self.assertGreater(count, 0)
+                    rows.update(range(first, first + count))
+                stride = 2 * W
+                differ = {y for y in range(H)
+                          if since is None or
+                          frames[since][y * stride:(y + 1) * stride]
+                          != frames[i][y * stride:(y + 1) * stride]}
+                self.assertTrue(differ <= rows, (since, i, runs))
+                if since is not None and since <= i:
+                    want = set()
+                    for k in range(since + 1, i + 1):
+                        for first, count in clip.changed_lines(k):
+                            want.update(range(first, first + count))
+                    self.assertEqual(rows, want)
+        rng = random.Random(3)
+        for i in [rng.randrange(n) for _ in range(40)]:
+            self.assertEqual(bytes(clip.frame(i)), frames[i])
+
+    def test_direct_player_sends_only_changed_rows(self):
+        for codec in ("zlib", "stored"):
+            with self.subTest(codec):
+                data, frames = square_clip(codec=codec)
+                clip = rv565.open(data)
+                bus = fakes.FourWire()
+                panel = FakePanel(320, 240, 2)
+                player = rv565.DirectPlayer(clip, bus, 320, 240,
+                                            clock=fakes.FakeClock(),
+                                            sleep=lambda s: None)
+                x0, y0 = (320 - W) // 2, (240 - H) // 2
+                for i in range(len(clip)):
+                    bus.sent.clear()
+                    player.show(i)
+                    panel.run(bus.sent)
+                    self.assertEqual(panel.region(x0, y0, W, H), frames[i], i)
+                    sent = sum(len(d) for c, d in bus.sent if c == 0x2C)
+                    rows = sum(c for _, c in clip.changed_lines(i))
+                    self.assertEqual(player.last_rows, rows)
+                    self.assertEqual(sent, rows * 2 * W)
+                    if clip.frame_type(i) == "partial":
+                        self.assertLess(sent, 2 * W * H)
+
+    def test_direct_player_on_vectors(self):
+        for name in ("rgb565be_zlib_partial_k5.rv565", "rgb565be_stored_partial_k5.rv565",
+                     "rgb565be_zlib_shift_k10.rv565", "rgb666_zlib_partial_k5.rv565"):
+            with self.subTest(name):
+                item = entry(name)
+                clip = rv565.open(vector(name))
+                bpp = 3 if item["pixel_format"] == "rgb666" else 2
+                bus = fakes.FourWire()
+                panel = FakePanel(320, 240, bpp)
+                player = rv565.DirectPlayer(clip, bus, 320, 240,
+                                            clock=fakes.FakeClock(),
+                                            sleep=lambda s: None)
+                x0, y0 = (320 - clip.width) // 2, (240 - clip.height) // 2
+                for i in range(len(clip)):
+                    bus.sent.clear()
+                    player.show(i)
+                    panel.run(bus.sent)
+                    self.assertEqual(sha(panel.region(x0, y0, clip.width, clip.height)),
+                                     item["frame_sha256"][i], i)
+                    rows = sum(c for _, c in item["changed_lines"][i])
+                    sent = sum(len(d) for c, d in bus.sent if c == 0x2C)
+                    self.assertEqual(sent, rows * clip.line_bytes)
+
+    def test_direct_player_play_counts_rows(self):
+        data, frames = square_clip()
+        clip = rv565.open(data)
+        clock = fakes.FakeClock()
+        player = rv565.DirectPlayer(clip, fakes.FourWire(), 320, 240, clock=clock,
+                                    sleep=clock.sleep)
+        stats = player.play()
+        want = sum(c for i in range(len(clip)) for _, c in clip.changed_lines(i))
+        self.assertEqual(stats.rows_updated, want)
+        self.assertLess(stats.rows_updated, H * len(clip))
+        self.assertIn("rows updated", repr(stats))
+
+    def check_player_dirty_area(self):
+        for fmt in ("rgb565be", "gray4", "mono"):
+            with self.subTest(fmt):
+                data, frames = square_clip(fmt)
+                clip = rv565.open(data)
+                player = rv565.Player(clip, fakes.Display())
+                for i in range(len(clip)):
+                    player.bitmap.dirty_rows.clear()
+                    want = clip.dirty_lines(player._shown_content, i)
+                    player.show(i)
+                    rows = set()
+                    for first, count in want:
+                        rows.update(range(first, first + count))
+                    self.assertEqual(player.bitmap.dirty_rows, rows, i)
+                    self.assertEqual(player.last_rows, len(rows))
+                    item = {"width": W, "height": H, "pixel_format": fmt}
+                    self.assertEqual(V7PlayerTest.shown_rgb(self, player),
+                                     expected_rgb(item, frames[i]), i)
+
+    def test_player_updates_only_changed_rows(self):
+        self.check_player_dirty_area()
+
+    def test_player_without_blit(self):
+        fakes.install(with_blit=False)
+        self.check_player_dirty_area()
+
+    def test_player_without_readinto(self):
+        fakes.install(with_readinto=False, with_blit=False)
+        self.check_player_dirty_area()
+
+    def test_player_skipping_partials(self):
+        data, frames = square_clip()
+        clip = rv565.open(data)
+        clock = fakes.FakeClock()
+        player = rv565.Player(clip, None, clock=clock, sleep=clock.sleep)
+        real_show = player.show
+        item = {"width": W, "height": H, "pixel_format": "rgb565be"}
+
+        def slow_show(i):
+            clock.now += 0.2  # 5 FPS on a 12 FPS clip
+            result = real_show(i)
+            self.assertEqual(V7PlayerTest.shown_rgb(self, player),
+                             expected_rgb(item, frames[i]), i)
+            return result
+
+        player.show = slow_show
+        stats = player.play()
+        self.assertGreater(stats.skipped, 0)
+        self.assertLess(stats.rows_updated, H * stats.shown)
 
 
 if __name__ == "__main__":

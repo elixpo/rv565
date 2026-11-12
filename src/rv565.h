@@ -17,9 +17,10 @@
  *   15      1     keyframe interval K (>= 1)
  *   H       ...   per frame: u32 length L, u8 frame type, L-1 bytes of body
  *
- * Frames are keyframes, XOR deltas from the previous decoded frame, or
- * repeats of it; every frame i with i % K == 0 is a keyframe, so seeking
- * applies at most K-1 records after a keyframe.
+ * Frames are keyframes, XOR deltas from the previous decoded frame, partial
+ * deltas (the XOR of only the bands of lines that changed), or repeats of
+ * it; every frame i with i % K == 0 is a keyframe, so seeking applies at most
+ * K-1 records after a keyframe.
  *
  * Version 6 files (RV565 1.x) still open: H = 12, RGB565 big-endian, zlib,
  * K = 1, records without a type byte, 1-30 FPS.
@@ -63,6 +64,7 @@ typedef enum {
     RV565_ERR_KEYFRAME    = -10, /* a frame at a multiple of K is not a keyframe */
     RV565_ERR_RECORD      = -11, /* repeat with a body, or stored body not frame-sized */
     RV565_ERR_UNSUPPORTED = -12, /* valid file this player or display cannot show */
+    RV565_ERR_PARTIAL     = -13, /* partial delta: band height 0, short mask, no band or a band past the frame */
 } rv565_status_t;
 
 typedef enum {
@@ -88,7 +90,8 @@ typedef enum {
     RV565_FRAME_KEY    = 0,
     RV565_FRAME_DELTA  = 1,  /* body decodes to F[i] XOR F[i-1] */
     RV565_FRAME_REPEAT = 2,  /* no body; F[i] = F[i-1] */
-    RV565_FRAME_TYPES  = 3
+    RV565_FRAME_PARTIAL = 3, /* band height, band mask, XOR of the changed bands */
+    RV565_FRAME_TYPES  = 4
 } rv565_frame_type_t;
 
 typedef struct {
@@ -136,11 +139,18 @@ uint8_t rv565_bytes_per_pixel(uint8_t pixel_format);
  * (mono_vpage: width * ceil(height / 8)). */
 size_t rv565_frame_bytes(const rv565_header_t *h);
 
+/* Line geometry for partial deltas and changed-line reports: a frame is
+ * *lines lines of *line_bytes bytes (pixel rows for formats 0-7, pages of 8
+ * rows for mono_vpage). */
+void rv565_frame_lines(const rv565_header_t *h, uint16_t *lines, size_t *line_bytes);
+
 /* Validate the complete container and build the frame index in one linear
  * scan: lengths nonzero and inside the data, no trailing bytes, and in
  * version 7 defined frame types, a keyframe at every multiple of K, repeats
- * without a body and stored bodies of exactly S bytes. Whether zlib bodies
- * inflate to S bytes is checked when they are decoded. `index` must hold at
+ * without a body, stored bodies of exactly S bytes, and partial deltas with
+ * a band height >= 1, a complete band mask with at least one band and none
+ * past the frame, and (stored) exactly the changed bands' bytes. Whether
+ * zlib data inflates to its size is checked when it is decoded. `index` must hold at
  * least header.frames entries. */
 rv565_status_t rv565_open(rv565_clip_t *clip, const uint8_t *data, size_t size,
                           uint32_t *index, size_t index_entries,
@@ -154,8 +164,43 @@ int rv565_frame_type(const rv565_clip_t *clip, uint16_t i);
  * Looks back at most K-1 records. */
 int32_t rv565_keyframe_at_or_before(const rv565_clip_t *clip, uint16_t i);
 
-/* Body pointer and length of frame i, in O(1): the encoded frame or delta
- * (length 0 for a repeat). */
+/* A run of lines a frame changes: lines first .. first + count - 1. */
+typedef struct {
+    uint16_t first;
+    uint16_t count;
+} rv565_line_run_t;
+
+/* The lines frame i changes relative to frame i-1, without decoding: one run
+ * of every line for a keyframe or delta, none for a repeat, and for a
+ * partial delta its changed bands with adjacent bands merged. Writes up to
+ * max_runs runs and sets *count to the total number of runs (which may be
+ * larger; a partial delta has at most ceil(lines / 2) runs). Returns
+ * RV565_ERR_ARG if runs is too small, after filling it. */
+rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
+                                   rv565_line_run_t *runs, size_t max_runs,
+                                   size_t *count);
+
+/* The same for one partial delta body (frame type 3, type byte excluded) of a
+ * frame of `lines` lines of `line_bytes` bytes, e.g. for a reader that parses
+ * the container itself. Returns RV565_ERR_PARTIAL for an invalid body. */
+rv565_status_t rv565_partial_runs(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes,
+                                  rv565_line_run_t *runs, size_t max_runs, size_t *count);
+
+/* Apply one partial delta body to a frame of `lines` lines of `line_bytes`
+ * bytes, as rv565_decode() does for a partial frame: `prev` holds the
+ * previous frame and is dst itself (in place: only the changed bands are
+ * written; a zlib body needs scratch of at least the changed bands' size) or
+ * does not overlap it (all of dst is written, no scratch). `codec` is
+ * RV565_CODEC_STORED or RV565_CODEC_ZLIB. */
+rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
+                                   uint16_t lines, size_t line_bytes, uint8_t codec,
+                                   const uint8_t *prev, uint8_t *dst,
+                                   uint8_t *scratch, size_t scratch_len);
+
+/* Body pointer and length of frame i, in O(1): the encoded frame or delta,
+ * the whole partial delta body (band height and mask included), or length 0
+ * for a repeat. */
 rv565_status_t rv565_payload(const rv565_clip_t *clip, uint16_t i,
                              const uint8_t **payload, uint32_t *length);
 
@@ -173,7 +218,10 @@ rv565_status_t rv565_inflate(const void *src, size_t src_len,
  *   - delta:    with prev != dst, decodes into dst and XORs prev into it;
  *               in place (prev == dst), stored deltas XOR straight from the
  *               body, and zlib deltas need `scratch` of at least S bytes
- *               (RV565_ERR_ARG without it).
+ *               (RV565_ERR_ARG without it);
+ *   - partial:  in place, XORs only the changed bands (a zlib partial needs
+ *               `scratch` of at least the changed bands' size, at most S);
+ *               with prev != dst, writes all of dst and needs no scratch.
  * Pass scratch = NULL, scratch_len = 0 when not decoding zlib deltas in place. */
 rv565_status_t rv565_decode(const rv565_clip_t *clip, uint16_t i,
                             const uint8_t *prev, uint8_t *dst, size_t dst_len,
@@ -188,7 +236,7 @@ rv565_status_t rv565_decode_frame(const rv565_clip_t *clip, uint16_t i,
 
 /* Random access: decode the keyframe at or before i into dst and apply the
  * records up to i, in place. A scratch buffer of S bytes is needed only if a
- * zlib delta lies on that path. */
+ * zlib delta or partial delta lies on that path. */
 rv565_status_t rv565_seek(const rv565_clip_t *clip, uint16_t i,
                           uint8_t *dst, size_t dst_len,
                           uint8_t *scratch, size_t scratch_len);

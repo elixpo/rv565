@@ -1,7 +1,8 @@
 """rv565: encode, inspect, verify and export RV565 video files.
 
   rv565 encode SOURCE OUT.rv565 [--start S] [--seconds N] [--fps F] [--size WxH]
-                [--format F] [--codec C] [--keyframe-interval K] [--level L] [--v6]
+                [--format F] [--codec C] [--keyframe-interval K] [--band-lines B]
+                [--motion-range M] [--tolerance T] [--level L] [--v6]
   rv565 info FILE.rv565 [--chip C] [--transfer-us T]
   rv565 verify FILE.rv565
   rv565 c-array FILE.rv565 OUT.h [--name NAME]
@@ -17,8 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import (CODECS, COST_ESP32S3_180x135, COST_RP2350_180x135, MAX_FPS, PIXEL_FORMATS,
-               RV565Error, convert, open as open_clip, write)
+from . import (BAND_LINES, CODECS, MOTION_RANGE, COST_ESP32S3_180x135, COST_RP2350_180x135, MAX_FPS,
+               PIXEL_FORMATS, RV565Error, convert, frame_lines, open as open_clip, write)
 
 
 def parse_size(text):
@@ -82,15 +83,21 @@ def container_options(args):
             raise SystemExit("--v6 allows only --format rgb565be --codec zlib --keyframe-interval 1")
         if args.fps > 30:
             raise SystemExit("--v6 allows at most 30 FPS")
+        if args.tolerance:
+            return {"version": 6, "tolerance": args.tolerance, "band_lines": 0}
         return {"version": 6}
     return {"pixel_format": args.format, "codec": args.codec,
-            "keyframe_interval": args.keyframe_interval}
+            "keyframe_interval": args.keyframe_interval, "band_lines": args.band_lines,
+            "tolerance": args.tolerance, "motion_range": args.motion_range}
 
 
 def describe(args):
     if args.v6:
         return "version 6"
-    return "%s, %s, keyframe every %d" % (args.format, args.codec, args.keyframe_interval)
+    text = "%s, %s, keyframe every %d" % (args.format, args.codec, args.keyframe_interval)
+    if args.tolerance:
+        text += ", tolerance %d" % args.tolerance
+    return text
 
 
 # Cost model and measured 320x240 display transfer for each measured chip.
@@ -110,9 +117,13 @@ def cmd_info(args):
         h.version, h.width, h.height, h.fps, h.frames, h.duration))
     print("pixels    %s, %d bytes per frame" % (h.pixel_format, h.frame_bytes))
     types = [clip.frame_type(i) for i in range(len(clip))]
-    print("frames    %s, keyframe interval %d: %d key, %d delta, %d repeat" % (
+    print("frames    %s, keyframe interval %d: %d key, %d delta, %d partial, %d repeat" % (
         h.codec, h.keyframe_interval, types.count("key"), types.count("delta"),
-        types.count("repeat")))
+        types.count("partial"), types.count("repeat")))
+    lines = frame_lines(h.pixel_format, h.width, h.height)[0]
+    sent = [sum(n for _, n in clip.changed_lines(i)) for i in range(len(clip))]
+    print("display   %.0f%% of lines sent per frame on average (repeats and unchanged "
+          "bands skipped)" % (100.0 * sum(sent) / (lines * len(sent))))
     print("size      %d bytes (raw %d, ratio %.2fx)" % (len(clip.data), raw, raw / len(clip.data)))
     coded = [s for s in sizes if s] or [0]
     print("payloads  min %d, mean %.0f, max %d bytes" % (
@@ -201,6 +212,19 @@ def add_container_args(p):
                    help="a keyframe at least every K frames; frames between are deltas or "
                         "repeats when smaller (default: one second of frames; 1 makes every "
                         "frame a keyframe)")
+    p.add_argument("--band-lines", type=int, default=BAND_LINES, choices=range(0, 256),
+                   metavar="0-255",
+                   help="band height for partial deltas, which store and send only the "
+                        "changed bands (default %d; 0 turns them off)" % BAND_LINES)
+    p.add_argument("--motion-range", type=int, default=MOTION_RANGE, choices=range(0, 64),
+                   metavar="0-63",
+                   help="search a shift of up to M pixels for each changed band, so "
+                        "scrolling and panning cost less (default %d; 0 turns it off)"
+                        % MOTION_RANGE)
+    p.add_argument("--tolerance", type=int, default=0, choices=range(0, 256), metavar="0-255",
+                   help="keep the previous pixel when every channel is within T of it "
+                        "(8-bit levels); 0, the default, is lossless. 8 is about one step "
+                        "of RGB565's red and blue")
     p.add_argument("--v6", action="store_true",
                    help="write a version 6 file for players older than RV565 2.0")
 

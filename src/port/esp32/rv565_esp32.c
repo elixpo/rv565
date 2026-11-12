@@ -20,6 +20,7 @@ static struct {
     rv565_esp32_display_config_t cfg;
     spi_transaction_t slots[2]; /* one per in-flight stripe */
     int next_slot;
+    int windowed;               /* a row window is set; restore before a full frame */
 } disp;
 
 static void poll_bytes(const void *data, size_t length)
@@ -40,14 +41,39 @@ static void command(uint8_t cmd, const uint8_t *data, size_t length)
     gpio_set_level(disp.cfg.pin_cs, 1);
 }
 
-static void begin_frame(void *ctx)
+static void start_ramwr(void)
 {
-    (void)ctx;
     const uint8_t ramwr = RV565_ST7789_RAMWR;
     gpio_set_level(disp.cfg.pin_cs, 0);
     gpio_set_level(disp.cfg.pin_dc, 0);
     poll_bytes(&ramwr, 1);
     gpio_set_level(disp.cfg.pin_dc, 1);
+}
+
+static void set_rows(uint16_t first, uint16_t rows)
+{
+    uint8_t raset[4];
+    rv565_st7789_rows(&disp.cfg.panel, first, rows, raset);
+    command(RV565_ST7789_RASET, raset, sizeof(raset));
+}
+
+static void begin_frame(void *ctx)
+{
+    (void)ctx;
+    if (disp.windowed) {
+        set_rows(0, rv565_panel_resolve(&disp.cfg.panel).height);
+        disp.windowed = 0;
+    }
+    start_ramwr();
+}
+
+/* Partial update: only rows first .. first + rows - 1 (full width). */
+static void begin_rows(void *ctx, uint16_t first, uint16_t rows)
+{
+    (void)ctx;
+    set_rows(first, rows);
+    disp.windowed = 1;
+    start_ramwr();
 }
 
 static void queue_stripe(void *ctx, const uint8_t *data, size_t length)
@@ -82,6 +108,7 @@ rv565_status_t rv565_esp32_display_init(const rv565_esp32_display_config_t *cfg,
     }
     disp.cfg = *cfg;
     disp.next_slot = 0;
+    disp.windowed = 0;
 
     uint64_t mask = (1ULL << cfg->pin_cs) | (1ULL << cfg->pin_dc);
     if (cfg->pin_rst >= 0) mask |= 1ULL << cfg->pin_rst;
@@ -140,6 +167,7 @@ rv565_status_t rv565_esp32_display_init(const rv565_esp32_display_config_t *cfg,
     ops->queue_stripe = queue_stripe;
     ops->wait_stripe = wait_stripe;
     ops->end_frame = end_frame;
+    ops->begin_rows = begin_rows;
     return RV565_OK;
 }
 

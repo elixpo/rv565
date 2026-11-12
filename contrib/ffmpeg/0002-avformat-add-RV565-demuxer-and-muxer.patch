@@ -1,6 +1,6 @@
-From 2fa325b896e6d7d12bf353661575911c52fc920c Mon Sep 17 00:00:00 2001
+From 0f6825371bfd7478a97694d1a95bd27de7d667cd Mon Sep 17 00:00:00 2001
 From: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
-Date: Thu, 12 Nov 2026 00:30:49 +0530
+Date: Thu, 12 Nov 2026 01:23:02 +0530
 Subject: [PATCH 2/2] avformat: add RV565 demuxer and muxer
 
 A little-endian header ("RV5", version, width, height, frame rate,
@@ -13,7 +13,8 @@ packets.
 On seekable input the demuxer validates every record when the file is
 opened (empty or truncated records, unknown frame types, a missing
 keyframe at a multiple of the keyframe interval, repeats with a body,
-stored bodies of the wrong size, bytes after the last record), as the
+stored bodies of the wrong size, partial deltas with a bad band height,
+mask or shift, bytes after the last record), as the
 specification requires, and indexes keyframes so a seek lands on the
 keyframe at or before the target, at most interval - 1 records away.
 Streamed input is checked record by record. Byte seeking is rejected.
@@ -24,8 +25,8 @@ frame count at the end.
 
 FATE: libavformat/tests/rv565 covers validation of seekable and
 streamed input and keyframe seeking; fate-rv565-enc-* encode a clip with
-repeated frames to every pixel format with stored frames, plus zlib with
-deltas and version 6 output; fate-lavf-rv565 and fate-seek-lavf-rv565
+repeated frames to every pixel format with stored frames and partial
+deltas, plus zlib with deltas, a lossy tolerance and version 6 output; fate-lavf-rv565 and fate-seek-lavf-rv565
 round-trip the lavf test clip; and fate-rv565-* decode conformance
 vectors from the specification (samples: rv565/).
 
@@ -38,17 +39,17 @@ Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
  doc/muxers.texi                               |  14 +
  libavformat/Makefile                          |   3 +
  libavformat/allformats.c                      |   2 +
- libavformat/rv565dec.c                        | 352 ++++++++++++++++++
- libavformat/rv565enc.c                        | 215 +++++++++++
+ libavformat/rv565dec.c                        | 413 ++++++++++++++++++
+ libavformat/rv565enc.c                        | 229 ++++++++++
  libavformat/tests/.gitignore                  |   1 +
- libavformat/tests/rv565.c                     | 296 +++++++++++++++
+ libavformat/tests/rv565.c                     | 319 ++++++++++++++
  libavformat/version.h                         |   2 +-
  tests/Makefile                                |   1 +
  tests/fate/lavf-video.mak                     |   2 +
  tests/fate/libavformat.mak                    |   4 +
- tests/fate/rv565.mak                          |  52 +++
+ tests/fate/rv565.mak                          |  60 +++
  tests/fate/seek.mak                           |   4 +-
- tests/ref/fate/rv565-demux                    |  49 +++
+ tests/ref/fate/rv565-demux                    |  69 +++
  tests/ref/fate/rv565-enc-delta                |  55 +++
  tests/ref/fate/rv565-enc-gray4                |  55 +++
  tests/ref/fate/rv565-enc-gray8                |  55 +++
@@ -59,21 +60,27 @@ Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
  tests/ref/fate/rv565-enc-rgb565le             |  55 +++
  tests/ref/fate/rv565-enc-rgb666               |  55 +++
  tests/ref/fate/rv565-enc-rgb888               |  55 +++
+ tests/ref/fate/rv565-enc-tolerance            |  55 +++
  tests/ref/fate/rv565-enc-v6                   |  55 +++
+ tests/ref/fate/rv565-gray4_stored_partial_k5  |  15 +
  tests/ref/fate/rv565-gray4_zlib_k4            |  15 +
  tests/ref/fate/rv565-gray8_stored_k3          |  15 +
  tests/ref/fate/rv565-mono_vpage_zlib_k4       |  15 +
+ .../ref/fate/rv565-mono_vpage_zlib_partial_k5 |  15 +
  .../ref/fate/rv565-mono_zlib_forced_delta_k8  |  15 +
  tests/ref/fate/rv565-rgb444_zlib_k4           |  15 +
  .../fate/rv565-rgb565be_zlib_forced_delta_k8  |  15 +
+ tests/ref/fate/rv565-rgb565be_zlib_partial_k5 |  15 +
+ tests/ref/fate/rv565-rgb565be_zlib_shift_k10  |  15 +
  tests/ref/fate/rv565-rgb565le_stored_k3       |  15 +
+ .../ref/fate/rv565-rgb565le_stored_shift_k10  |  15 +
  tests/ref/fate/rv565-rgb666_stored_k3         |  15 +
  tests/ref/fate/rv565-rgb888_zlib_k4           |  15 +
  tests/ref/fate/rv565-testpattern_v6           |  29 ++
  tests/ref/lavf/rv565                          |   3 +
- tests/ref/seek/extra-rv565                    |  42 +++
- tests/ref/seek/lavf-rv565                     |  44 +++
- 40 files changed, 1856 insertions(+), 2 deletions(-)
+ tests/ref/seek/extra-rv565                    |  42 ++
+ tests/ref/seek/lavf-rv565                     |  44 ++
+ 46 files changed, 2112 insertions(+), 2 deletions(-)
  create mode 100644 libavformat/rv565dec.c
  create mode 100644 libavformat/rv565enc.c
  create mode 100644 libavformat/tests/rv565.c
@@ -89,14 +96,20 @@ Signed-off-by: Ayushman Bhattacharya <ayushman.elixpo@gmail.com>
  create mode 100644 tests/ref/fate/rv565-enc-rgb565le
  create mode 100644 tests/ref/fate/rv565-enc-rgb666
  create mode 100644 tests/ref/fate/rv565-enc-rgb888
+ create mode 100644 tests/ref/fate/rv565-enc-tolerance
  create mode 100644 tests/ref/fate/rv565-enc-v6
+ create mode 100644 tests/ref/fate/rv565-gray4_stored_partial_k5
  create mode 100644 tests/ref/fate/rv565-gray4_zlib_k4
  create mode 100644 tests/ref/fate/rv565-gray8_stored_k3
  create mode 100644 tests/ref/fate/rv565-mono_vpage_zlib_k4
+ create mode 100644 tests/ref/fate/rv565-mono_vpage_zlib_partial_k5
  create mode 100644 tests/ref/fate/rv565-mono_zlib_forced_delta_k8
  create mode 100644 tests/ref/fate/rv565-rgb444_zlib_k4
  create mode 100644 tests/ref/fate/rv565-rgb565be_zlib_forced_delta_k8
+ create mode 100644 tests/ref/fate/rv565-rgb565be_zlib_partial_k5
+ create mode 100644 tests/ref/fate/rv565-rgb565be_zlib_shift_k10
  create mode 100644 tests/ref/fate/rv565-rgb565le_stored_k3
+ create mode 100644 tests/ref/fate/rv565-rgb565le_stored_shift_k10
  create mode 100644 tests/ref/fate/rv565-rgb666_stored_k3
  create mode 100644 tests/ref/fate/rv565-rgb888_zlib_k4
  create mode 100644 tests/ref/fate/rv565-testpattern_v6
@@ -190,10 +203,10 @@ index 3306d71bf7..256ef25ed1 100644
  extern const FFInputFormat  ff_sap_demuxer;
 diff --git a/libavformat/rv565dec.c b/libavformat/rv565dec.c
 new file mode 100644
-index 0000000000..f4f80994b7
+index 0000000000..aed3d0eefb
 --- /dev/null
 +++ b/libavformat/rv565dec.c
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,413 @@
 +/*
 + * RV565 demuxer
 + *
@@ -223,13 +236,15 @@ index 0000000000..f4f80994b7
 + * A little-endian header ("RV5", version, width, height, frames per second,
 + * flags, frame count and, in version 7, header size, pixel format, codec and
 + * keyframe interval) followed by one record per frame: a u32 length, then in
-+ * version 7 a frame type byte, then the body. Version 6 records have no type
++ * version 7 a frame type byte (keyframe, delta, repeat or partial delta),
++ * then the body. Version 6 records have no type
 + * byte and are all keyframes; the demuxer adds the type byte, so packets of
 + * both versions are frame records without their length.
 + * Specification: https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md
 + */
 +
 +#include "libavutil/intreadwrite.h"
++#include "libavutil/mem.h"
 +#include "libavcodec/rv565.h"
 +#include "avformat.h"
 +#include "demux.h"
@@ -245,7 +260,11 @@ index 0000000000..f4f80994b7
 +    int codec;
 +    int keyframe_interval;
 +    int64_t frame_size;
++    int lines;                  ///< lines of a frame, for partial deltas
++    int64_t line_size;
 +    int current_frame;
++    uint8_t *partial;           ///< the fields of a partial delta, when indexing
++    unsigned partial_size;
 +} RV565DemuxContext;
 +
 +/* Reading stopped before a declared frame was complete. */
@@ -289,9 +308,20 @@ index 0000000000..f4f80994b7
 +    return AVPROBE_SCORE_MAX;
 +}
 +
-+/* Check the frame record rules that need no decoding. */
-+static int rv565_check_record(AVFormatContext *s, int n, uint32_t length, int type)
++/* Check the frame record rules that need no decoding. body holds the first
++ * body_size bytes of the body, all of it or at least the band mask of a
++ * partial delta. */
++static int rv565_check_record(AVFormatContext *s, int n, uint32_t length, int type,
++                              const uint8_t *body, int body_size)
 +{
++    static const char *const partial_errors[] = {
++        [RV565_PARTIAL_BAND_HEIGHT] = "band height 0",
++        [RV565_PARTIAL_SHORT_MASK]  = "a truncated band mask",
++        [RV565_PARTIAL_NO_BAND]     = "no changed band",
++        [RV565_PARTIAL_PAST_END]    = "a band past the frame",
++        [RV565_PARTIAL_SHORT_SHIFTS] = "truncated band shifts",
++        [RV565_PARTIAL_SHIFT_DY]    = "a band shifted by its height or more",
++    };
 +    RV565DemuxContext *r = s->priv_data;
 +
 +    if (!length) {
@@ -310,11 +340,28 @@ index 0000000000..f4f80994b7
 +        av_log(s, AV_LOG_ERROR, "Repeat frame %d has a body.\n", n);
 +        return AVERROR_INVALIDDATA;
 +    }
-+    if (type != RV565_FRAME_REPEAT && r->codec == RV565_CODEC_STORED &&
-+        length - 1 != r->frame_size) {
++    if ((type == RV565_FRAME_KEY || type == RV565_FRAME_DELTA) &&
++        r->codec == RV565_CODEC_STORED && length - 1 != r->frame_size) {
 +        av_log(s, AV_LOG_ERROR, "Stored frame %d has %"PRIu32" bytes instead of %"PRId64".\n",
 +               n, length - 1, r->frame_size);
 +        return AVERROR_INVALIDDATA;
++    }
++    if (type == RV565_FRAME_PARTIAL) {
++        int band_height, header_size;
++        int64_t data_size;
++        enum RV565PartialError err;
++
++        err = ff_rv565_parse_partial(body, body_size, r->lines, r->line_size,
++                                     &band_height, &header_size, &data_size);
++        if (err != RV565_PARTIAL_OK) {
++            av_log(s, AV_LOG_ERROR, "Partial delta %d has %s.\n", n, partial_errors[err]);
++            return AVERROR_INVALIDDATA;
++        }
++        if (r->codec == RV565_CODEC_STORED && length - 1 - header_size != data_size) {
++            av_log(s, AV_LOG_ERROR, "Stored partial delta %d has %"PRId64" bytes "
++                   "instead of %"PRId64".\n", n, (int64_t)length - 1 - header_size, data_size);
++            return AVERROR_INVALIDDATA;
++        }
 +    }
 +
 +    return 0;
@@ -333,7 +380,7 @@ index 0000000000..f4f80994b7
 +
 +    for (int n = 0; n < st->nb_frames; n++) {
 +        uint32_t length;
-+        int type = RV565_FRAME_KEY;
++        int type = RV565_FRAME_KEY, body_size = 0;
 +
 +        if ((ret = avio_seek(pb, pos, SEEK_SET)) < 0)
 +            return ret;
@@ -344,7 +391,21 @@ index 0000000000..f4f80994b7
 +            av_log(s, AV_LOG_ERROR, "Frame %d is truncated.\n", n);
 +            return rv565_missing_data(pb);
 +        }
-+        if ((ret = rv565_check_record(s, n, length, type)) < 0)
++        if (type == RV565_FRAME_PARTIAL && length > 1) {
++            /* Read the band height, mask and shifts, at most 2 bytes per band
++             * and a mask bit per band. */
++            const int band_height = avio_r8(pb);
++            const int bands = band_height ? (r->lines + band_height - 1) / band_height : 0;
++
++            body_size = FFMIN(length - 1, 1 + ((bands + 7) >> 3) + 2 * bands);
++            av_fast_malloc(&r->partial, &r->partial_size, body_size);
++            if (!r->partial)
++                return AVERROR(ENOMEM);
++            r->partial[0] = band_height;
++            if (avio_read(pb, r->partial + 1, body_size - 1) != body_size - 1)
++                return rv565_missing_data(pb);
++        }
++        if ((ret = rv565_check_record(s, n, length, type, r->partial, body_size)) < 0)
 +            return ret;
 +        /* The signed 30-bit index size holds at most 0x1fffffff; larger
 +         * records use an unspecified size, as seeking only needs the
@@ -450,6 +511,7 @@ index 0000000000..f4f80994b7
 +    par->extradata[1] = r->codec;
 +    par->extradata[2] = r->keyframe_interval;
 +    r->frame_size     = ff_rv565_frame_size(format, width, height);
++    ff_rv565_frame_lines(format, width, height, &r->lines, &r->line_size);
 +
 +    st->avg_frame_rate = (AVRational){ fps, 1 };
 +    st->start_time     = 0;
@@ -501,7 +563,8 @@ index 0000000000..f4f80994b7
 +    if (ret != length)
 +        return rv565_missing_data(pb);
 +
-+    ret = rv565_check_record(s, r->current_frame, pkt->size, pkt->data[0]);
++    ret = rv565_check_record(s, r->current_frame, pkt->size, pkt->data[0],
++                             pkt->data + 1, pkt->size - 1);
 +    if (ret < 0)
 +        return ret;
 +
@@ -511,6 +574,15 @@ index 0000000000..f4f80994b7
 +    pkt->duration     = 1;
 +    if (pkt->data[0] == RV565_FRAME_KEY)
 +        pkt->flags |= AV_PKT_FLAG_KEY;
++
++    return 0;
++}
++
++static int rv565_read_close(AVFormatContext *s)
++{
++    RV565DemuxContext *r = s->priv_data;
++
++    av_freep(&r->partial);
 +
 +    return 0;
 +}
@@ -545,13 +617,15 @@ index 0000000000..f4f80994b7
 +    .read_header    = rv565_read_header,
 +    .read_packet    = rv565_read_packet,
 +    .read_seek      = rv565_read_seek,
++    .read_close     = rv565_read_close,
++    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
 +};
 diff --git a/libavformat/rv565enc.c b/libavformat/rv565enc.c
 new file mode 100644
-index 0000000000..2a748ca5b8
+index 0000000000..6a94bd4cee
 --- /dev/null
 +++ b/libavformat/rv565enc.c
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,229 @@
 +/*
 + * RV565 muxer
 + *
@@ -599,6 +673,8 @@ index 0000000000..2a748ca5b8
 +    int codec;
 +    int keyframe_interval;
 +    int64_t frame_size;
++    int lines;
++    int64_t line_size;
 +    int64_t frame_count_pos;
 +    int nb_frames;
 +} RV565MuxContext;
@@ -644,6 +720,7 @@ index 0000000000..2a748ca5b8
 +        return AVERROR(EINVAL);
 +    }
 +    r->frame_size = ff_rv565_frame_size(format, par->width, par->height);
++    ff_rv565_frame_lines(format, par->width, par->height, &r->lines, &r->line_size);
 +
 +    if (!rate.num || !rate.den)
 +        rate = av_inv_q(st->time_base);
@@ -680,7 +757,7 @@ index 0000000000..2a748ca5b8
 +static int rv565_write_packet(AVFormatContext *s, AVPacket *pkt)
 +{
 +    RV565MuxContext *r = s->priv_data;
-+    int type;
++    int type, partial_ok = 0;
 +
 +    if (pkt->size < 1)
 +        return AVERROR_INVALIDDATA;
@@ -691,11 +768,22 @@ index 0000000000..2a748ca5b8
 +
 +    /* Write only records a reader accepts. */
 +    type = pkt->data[0];
++    if (type == RV565_FRAME_PARTIAL) {
++        int band_height, header_size;
++        int64_t data_size;
++
++        partial_ok = ff_rv565_parse_partial(pkt->data + 1, pkt->size - 1, r->lines,
++                                            r->line_size, &band_height, &header_size,
++                                            &data_size) == RV565_PARTIAL_OK &&
++                     (r->codec == RV565_CODEC_ZLIB ? pkt->size > 1 + header_size :
++                                                    pkt->size - 1 - header_size == data_size);
++    }
 +    if (type >= RV565_FRAME_NB ||
 +        (!(r->nb_frames % r->keyframe_interval) && type != RV565_FRAME_KEY) ||
 +        (type == RV565_FRAME_REPEAT && pkt->size != 1) ||
-+        (type != RV565_FRAME_REPEAT && (r->codec == RV565_CODEC_ZLIB ? pkt->size < 2 :
-+                                        pkt->size - 1 != r->frame_size))) {
++        (type == RV565_FRAME_PARTIAL && !partial_ok) ||
++        ((type == RV565_FRAME_KEY || type == RV565_FRAME_DELTA) &&
++         (r->codec == RV565_CODEC_ZLIB ? pkt->size < 2 : pkt->size - 1 != r->frame_size))) {
 +        av_log(s, AV_LOG_ERROR, "Invalid frame record for frame %d.\n", r->nb_frames);
 +        return AVERROR_INVALIDDATA;
 +    }
@@ -778,10 +866,10 @@ index b5fd1ff009..b49d967591 100644
 +/rv565
 diff --git a/libavformat/tests/rv565.c b/libavformat/tests/rv565.c
 new file mode 100644
-index 0000000000..fec1a82e4f
+index 0000000000..8a8174ca03
 --- /dev/null
 +++ b/libavformat/tests/rv565.c
-@@ -0,0 +1,296 @@
+@@ -0,0 +1,319 @@
 +/*
 + * RV565 demuxer validation and seeking tests
 + *
@@ -1067,6 +1155,29 @@ index 0000000000..fec1a82e4f
 +    /* Stored frames must be exactly 4 * 2 * 2 bytes. */
 +    CORRUPT("stored, wrong size",   14,            0);
 +
++    /* Band height, mask, and (dx, dy) shifts of 0 for up to two bands. */
++#define PARTIAL(name, frame, band_height, mask, dy) do { \
++        memcpy(buf, clip, size);                       \
++        buf[record(frame) + 4] = 3;                    \
++        buf[record(frame) + 5] = band_height;          \
++        buf[record(frame) + 6] = mask;                 \
++        memset(buf + record(frame) + 7, 0, 4);         \
++        buf[record(frame) + 8] = dy;                   \
++        run(name, buf, size);                          \
++    } while (0)
++
++    /* 2 lines: band height 1 gives 2 bands, band height 2 or more one. */
++    PARTIAL("partial delta",                 1, 1, 0x03, 0);
++    PARTIAL("partial delta, one band",       1, 2, 0x01, 0);
++    PARTIAL("partial, shifted up",           1, 2, 0x01, 0xff);
++    PARTIAL("partial at keyframe",           2, 1, 0x01, 0);
++    PARTIAL("partial, band height 0",        1, 0, 0x01, 0);
++    PARTIAL("partial, no band",              1, 1, 0x00, 0);
++    PARTIAL("partial, band past the end",    1, 1, 0x04, 0);
++    PARTIAL("partial, band past the end 2",  1, 2, 0x02, 0);
++    PARTIAL("partial, shifted 2 lines",      1, 2, 0x01, 2);
++    PARTIAL("partial, shifted -2 lines",     1, 2, 0x01, 0xfe);
++
 +    size6 = make_clip_v6(buf);
 +    run("version 6", buf, size6);
 +    buf[8] = 31;
@@ -1140,12 +1251,13 @@ index 6daa10df86..16f3b5bc5b 100644
  fate-mkdir: CMD = run libavformat/tests/mkdir$(EXESUF)
 diff --git a/tests/fate/rv565.mak b/tests/fate/rv565.mak
 new file mode 100644
-index 0000000000..aa9e174281
+index 0000000000..18c65d1e64
 --- /dev/null
 +++ b/tests/fate/rv565.mak
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,60 @@
 +# Encode a clip whose frames repeat (testsrc at 6 fps resampled to 12 fps)
-+# to every RV565 pixel format, then decode it. Stored frames keep the
++# to every RV565 pixel format, with keyframes, partial deltas and repeats,
++# then decode it. Stored frames keep the
 +# reference independent of the zlib implementation; 21x13 pads the rows of
 +# rgb444, gray4 and mono and the last page of mono_vpage.
 +RV565_SRC = testsrc=s=21x13:r=6:d=2,fps=12
@@ -1170,7 +1282,12 @@ index 0000000000..aa9e174281
 +# Keyframes, deltas and repeats with zlib.
 +FATE_RV565_ENC += fate-rv565-enc-delta
 +fate-rv565-enc-delta: CMD = transcode lavfi "$(RV565_SRC),scale,format=rgb565be" rv565 \
-+    "-c:v rv565 -g 8" "" "$(RV565_PROBE)"
++    "-c:v rv565 -g 8 -band_lines 0" "" "$(RV565_PROBE)"
++
++# Lossy: pixels within the tolerance of the previous frame are kept.
++FATE_RV565_ENC += fate-rv565-enc-tolerance
++fate-rv565-enc-tolerance: CMD = transcode lavfi "$(RV565_SRC),scale,format=rgb24" rv565 \
++    "-c:v rv565 -compressor stored -g 12 -band_lines 2 -tolerance 48" "" "$(RV565_PROBE)"
 +
 +# Version 6 output.
 +FATE_RV565_ENC += fate-rv565-enc-v6
@@ -1190,7 +1307,9 @@ index 0000000000..aa9e174281
 +
 +$(foreach V,rgb565be_zlib_forced_delta_k8 rgb565le_stored_k3 rgb444_zlib_k4 \
 +            rgb666_stored_k3 rgb888_zlib_k4 gray8_stored_k3 gray4_zlib_k4 \
-+            mono_zlib_forced_delta_k8 mono_vpage_zlib_k4 testpattern_v6, \
++            mono_zlib_forced_delta_k8 mono_vpage_zlib_k4 rgb565be_zlib_partial_k5 \
++            gray4_stored_partial_k5 mono_vpage_zlib_partial_k5 rgb565be_zlib_shift_k10 \
++            rgb565le_stored_shift_k10 testpattern_v6, \
 +            $(eval $(call FATE_RV565_DEC_TEST,$(V))))
 +
 +FATE_FFMPEG_FFPROBE += $(FATE_RV565-yes)
@@ -1222,10 +1341,10 @@ index d33cef4d92..264b325bcc 100644
  fate-seek-empty-edit-mp4:  CMD = run libavformat/tests/seek$(EXESUF) $(TARGET_SAMPLES)/mov/empty_edit_5s.mp4 -duration 15 -frames 4
 diff --git a/tests/ref/fate/rv565-demux b/tests/ref/fate/rv565-demux
 new file mode 100644
-index 0000000000..fb8f1559d4
+index 0000000000..e1fd16634d
 --- /dev/null
 +++ b/tests/ref/fate/rv565-demux
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,69 @@
 +valid                          seekable packets 4 ( 0K 1 0K 2 ), then EOF
 +valid                          streamed packets 4 ( 0K 1 0K 2 ), then EOF
 +truncated after record         seekable open INVALIDDATA
@@ -1264,6 +1383,26 @@ index 0000000000..fb8f1559d4
 +repeat with body               streamed packets 1 ( 0K ), then INVALIDDATA
 +stored, wrong size             seekable open INVALIDDATA
 +stored, wrong size             streamed packets 0 ( ), then INVALIDDATA
++partial delta                  seekable packets 4 ( 0K 3 0K 2 ), then EOF
++partial delta                  streamed packets 4 ( 0K 3 0K 2 ), then EOF
++partial delta, one band        seekable packets 4 ( 0K 3 0K 2 ), then EOF
++partial delta, one band        streamed packets 4 ( 0K 3 0K 2 ), then EOF
++partial, shifted up            seekable packets 4 ( 0K 3 0K 2 ), then EOF
++partial, shifted up            streamed packets 4 ( 0K 3 0K 2 ), then EOF
++partial at keyframe            seekable open INVALIDDATA
++partial at keyframe            streamed packets 2 ( 0K 1 ), then INVALIDDATA
++partial, band height 0         seekable open INVALIDDATA
++partial, band height 0         streamed packets 1 ( 0K ), then INVALIDDATA
++partial, no band               seekable open INVALIDDATA
++partial, no band               streamed packets 1 ( 0K ), then INVALIDDATA
++partial, band past the end     seekable open INVALIDDATA
++partial, band past the end     streamed packets 1 ( 0K ), then INVALIDDATA
++partial, band past the end 2   seekable open INVALIDDATA
++partial, band past the end 2   streamed packets 1 ( 0K ), then INVALIDDATA
++partial, shifted 2 lines       seekable open INVALIDDATA
++partial, shifted 2 lines       streamed packets 1 ( 0K ), then INVALIDDATA
++partial, shifted -2 lines      seekable open INVALIDDATA
++partial, shifted -2 lines      streamed packets 1 ( 0K ), then INVALIDDATA
 +version 6                      seekable packets 3 ( 0K 0K 0K ), then EOF
 +version 6                      streamed packets 3 ( 0K 0K 0K ), then EOF
 +version 6, frame rate 31       seekable open INVALIDDATA
@@ -1338,12 +1477,12 @@ index 0000000000..896bd09e04
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-gray4 b/tests/ref/fate/rv565-enc-gray4
 new file mode 100644
-index 0000000000..745192b68d
+index 0000000000..6a62f50d72
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-gray4
 @@ -0,0 +1,55 @@
-+9717a54112fa3aec806909c29ca3baa8 *tests/data/fate/rv565-enc-gray4.rv565
-+1852 tests/data/fate/rv565-enc-gray4.rv565
++cf085df4aee664e15f9eccb8f331b287 *tests/data/fate/rv565-enc-gray4.rv565
++1348 tests/data/fate/rv565-enc-gray4.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1375,36 +1514,36 @@ index 0000000000..745192b68d
 +0,         23,         23,        1,      273, 0x804c82b0
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-gray8 b/tests/ref/fate/rv565-enc-gray8
 new file mode 100644
-index 0000000000..d9e90316c6
+index 0000000000..eb6da91a8a
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-gray8
 @@ -0,0 +1,55 @@
-+74b8bea7e874b36b2894b2661a77c0c0 *tests/data/fate/rv565-enc-gray8.rv565
-+3412 tests/data/fate/rv565-enc-gray8.rv565
++4a859b9a36d3e4d0bbc2b5b89758187c *tests/data/fate/rv565-enc-gray8.rv565
++2428 tests/data/fate/rv565-enc-gray8.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1436,36 +1575,36 @@ index 0000000000..d9e90316c6
 +0,         23,         23,        1,      273, 0x78b1828e
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-mono b/tests/ref/fate/rv565-enc-mono
 new file mode 100644
-index 0000000000..d16c36d6fc
+index 0000000000..1494f6c31f
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-mono
 @@ -0,0 +1,55 @@
-+6a6a2162582c6f181094782651c64fb9 *tests/data/fate/rv565-enc-mono.rv565
-+604 tests/data/fate/rv565-enc-mono.rv565
++abba130e5f54eef182a4b818ac1fe05e *tests/data/fate/rv565-enc-mono.rv565
++484 tests/data/fate/rv565-enc-mono.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1497,36 +1636,36 @@ index 0000000000..d16c36d6fc
 +0,         23,         23,        1,       39, 0xa24808be
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-mono_vpage b/tests/ref/fate/rv565-enc-mono_vpage
 new file mode 100644
-index 0000000000..4a50397c1e
+index 0000000000..ab0d4c4553
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-mono_vpage
 @@ -0,0 +1,55 @@
-+93aeaa9d319e9265bb80608b0544ce3c *tests/data/fate/rv565-enc-mono_vpage.rv565
-+640 tests/data/fate/rv565-enc-mono_vpage.rv565
++5064c919cbd8f8a791dcf4f33ffd9400 *tests/data/fate/rv565-enc-mono_vpage.rv565
++664 tests/data/fate/rv565-enc-mono_vpage.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1558,36 +1697,36 @@ index 0000000000..4a50397c1e
 +0,         23,         23,        1,       39, 0xa24808be
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-rgb444 b/tests/ref/fate/rv565-enc-rgb444
 new file mode 100644
-index 0000000000..c29cf1f086
+index 0000000000..e238a86276
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-rgb444
 @@ -0,0 +1,55 @@
-+87c3f17a893befea6cdcafe50b1ab1b5 *tests/data/fate/rv565-enc-rgb444.rv565
-+5128 tests/data/fate/rv565-enc-rgb444.rv565
++03e5a46f0eb440ebbbd644fd92be0358 *tests/data/fate/rv565-enc-rgb444.rv565
++3616 tests/data/fate/rv565-enc-rgb444.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1619,36 +1758,36 @@ index 0000000000..c29cf1f086
 +0,         23,         23,        1,      546, 0x05148f19
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-rgb565be b/tests/ref/fate/rv565-enc-rgb565be
 new file mode 100644
-index 0000000000..6bab3040b3
+index 0000000000..07b0e95b3a
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-rgb565be
 @@ -0,0 +1,55 @@
-+d8b56334a2550618825183ff8eca97a4 *tests/data/fate/rv565-enc-rgb565be.rv565
-+6688 tests/data/fate/rv565-enc-rgb565be.rv565
++683bd75411f043c3d4d1d4d8e2bb8c4b *tests/data/fate/rv565-enc-rgb565be.rv565
++4696 tests/data/fate/rv565-enc-rgb565be.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1680,36 +1819,36 @@ index 0000000000..6bab3040b3
 +0,         23,         23,        1,      546, 0xece605d0
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-rgb565le b/tests/ref/fate/rv565-enc-rgb565le
 new file mode 100644
-index 0000000000..15bc98083b
+index 0000000000..272396beb3
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-rgb565le
 @@ -0,0 +1,55 @@
-+90eb6cff704d3a5cbac9c3427f327325 *tests/data/fate/rv565-enc-rgb565le.rv565
-+6688 tests/data/fate/rv565-enc-rgb565le.rv565
++1247550d8f884b3ce4af4ae708e63d3a *tests/data/fate/rv565-enc-rgb565le.rv565
++4696 tests/data/fate/rv565-enc-rgb565le.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1741,36 +1880,36 @@ index 0000000000..15bc98083b
 +0,         23,         23,        1,      546, 0x79bd05b6
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-rgb666 b/tests/ref/fate/rv565-enc-rgb666
 new file mode 100644
-index 0000000000..305410e23f
+index 0000000000..4171c963cd
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-rgb666
 @@ -0,0 +1,55 @@
-+f7d057332f12c8fd9add77aa1c5cfa17 *tests/data/fate/rv565-enc-rgb666.rv565
-+9964 tests/data/fate/rv565-enc-rgb666.rv565
++98d739d675103936c04f0bf0df30a9c9 *tests/data/fate/rv565-enc-rgb666.rv565
++6964 tests/data/fate/rv565-enc-rgb666.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1802,36 +1941,36 @@ index 0000000000..305410e23f
 +0,         23,         23,        1,      819, 0xbb83832f
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-rgb888 b/tests/ref/fate/rv565-enc-rgb888
 new file mode 100644
-index 0000000000..9181c2e05c
+index 0000000000..ed5a2f3150
 --- /dev/null
 +++ b/tests/ref/fate/rv565-enc-rgb888
 @@ -0,0 +1,55 @@
-+8b2a0eeccc6bbd3837a3f6646bc43fd0 *tests/data/fate/rv565-enc-rgb888.rv565
-+9964 tests/data/fate/rv565-enc-rgb888.rv565
++8d219389b421745615e83c52afa2effc *tests/data/fate/rv565-enc-rgb888.rv565
++6964 tests/data/fate/rv565-enc-rgb888.rv565
 +#tb 0: 1/12
 +#media_type 0: video
 +#codec_id 0: rawvideo
@@ -1863,27 +2002,88 @@ index 0000000000..9181c2e05c
 +0,         23,         23,        1,      819, 0xfe3187cb
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
-+1|I
++0|P
 +0|P
 +1|I
 +0|P
++0|P
++0|P
+diff --git a/tests/ref/fate/rv565-enc-tolerance b/tests/ref/fate/rv565-enc-tolerance
+new file mode 100644
+index 0000000000..f3b1437e2e
+--- /dev/null
++++ b/tests/ref/fate/rv565-enc-tolerance
+@@ -0,0 +1,55 @@
++9a988ddf37a414bda54daa553a590225 *tests/data/fate/rv565-enc-tolerance.rv565
++4096 tests/data/fate/rv565-enc-tolerance.rv565
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,      819, 0x93f08725
++0,          1,          1,        1,      819, 0x93f08725
++0,          2,          2,        1,      819, 0x93f08725
++0,          3,          3,        1,      819, 0x93f08725
++0,          4,          4,        1,      819, 0x2f80879b
++0,          5,          5,        1,      819, 0x2f80879b
++0,          6,          6,        1,      819, 0x4362865d
++0,          7,          7,        1,      819, 0x4362865d
++0,          8,          8,        1,      819, 0x030a889d
++0,          9,          9,        1,      819, 0x030a889d
++0,         10,         10,        1,      819, 0x8967869f
++0,         11,         11,        1,      819, 0x8967869f
++0,         12,         12,        1,      819, 0x21ae88e9
++0,         13,         13,        1,      819, 0x21ae88e9
++0,         14,         14,        1,      819, 0xd0ae8721
++0,         15,         15,        1,      819, 0xd0ae8721
++0,         16,         16,        1,      819, 0x352f86ab
++0,         17,         17,        1,      819, 0x352f86ab
++0,         18,         18,        1,      819, 0xb33488af
++0,         19,         19,        1,      819, 0xb33488af
++0,         20,         20,        1,      819, 0xf392866f
++0,         21,         21,        1,      819, 0xf392866f
++0,         22,         22,        1,      819, 0x6d35886d
++0,         23,         23,        1,      819, 0x6d35886d
 +1|I
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++1|I
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
++0|P
 +0|P
 diff --git a/tests/ref/fate/rv565-enc-v6 b/tests/ref/fate/rv565-enc-v6
 new file mode 100644
@@ -1946,6 +2146,27 @@ index 0000000000..492681e11e
 +1|I
 +1|I
 +1|I
+diff --git a/tests/ref/fate/rv565-gray4_stored_partial_k5 b/tests/ref/fate/rv565-gray4_stored_partial_k5
+new file mode 100644
+index 0000000000..37bff11ec3
+--- /dev/null
++++ b/tests/ref/fate/rv565-gray4_stored_partial_k5
+@@ -0,0 +1,15 @@
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,      273, 0x1c5f8f4e
++0,          1,          1,        1,      273, 0x59038e2d
++0,          2,          2,        1,      273, 0x9e278d0c
++0,          3,          3,        1,      273, 0xe9ef8bfc
++0,          4,          4,        1,      273, 0x386e8adb
++0,          5,          5,        1,      273, 0x386e8adb
++0,          6,          6,        1,      273, 0x814a89ba
++0,          7,          7,        1,      273, 0xd2a68899
++0,          8,          8,        1,      273, 0x24dd8778
++0,          9,          9,        1,      273, 0x67d08624
 diff --git a/tests/ref/fate/rv565-gray4_zlib_k4 b/tests/ref/fate/rv565-gray4_zlib_k4
 new file mode 100644
 index 0000000000..37bff11ec3
@@ -1993,6 +2214,27 @@ new file mode 100644
 index 0000000000..5c2adce3e9
 --- /dev/null
 +++ b/tests/ref/fate/rv565-mono_vpage_zlib_k4
+@@ -0,0 +1,15 @@
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,       39, 0xf19d1435
++0,          1,          1,        1,       39, 0xbe7f11fb
++0,          2,          2,        1,       39, 0xcbcf122b
++0,          3,          3,        1,       39, 0xcf5f123b
++0,          4,          4,        1,       39, 0xcf711235
++0,          5,          5,        1,       39, 0xcf711235
++0,          6,          6,        1,       39, 0xb5471174
++0,          7,          7,        1,       39, 0xa9771084
++0,          8,          8,        1,       39, 0xa2c31024
++0,          9,          9,        1,       39, 0xa1c51015
+diff --git a/tests/ref/fate/rv565-mono_vpage_zlib_partial_k5 b/tests/ref/fate/rv565-mono_vpage_zlib_partial_k5
+new file mode 100644
+index 0000000000..5c2adce3e9
+--- /dev/null
++++ b/tests/ref/fate/rv565-mono_vpage_zlib_partial_k5
 @@ -0,0 +1,15 @@
 +#tb 0: 1/12
 +#media_type 0: video
@@ -2072,6 +2314,48 @@ index 0000000000..c50fc1758c
 +0,          7,          7,        1,      546, 0x787c2bd9
 +0,          8,          8,        1,      546, 0x78c82849
 +0,          9,          9,        1,      546, 0x3f3525de
+diff --git a/tests/ref/fate/rv565-rgb565be_zlib_partial_k5 b/tests/ref/fate/rv565-rgb565be_zlib_partial_k5
+new file mode 100644
+index 0000000000..c50fc1758c
+--- /dev/null
++++ b/tests/ref/fate/rv565-rgb565be_zlib_partial_k5
+@@ -0,0 +1,15 @@
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,      546, 0x07b14169
++0,          1,          1,        1,      546, 0x5cee3dd9
++0,          2,          2,        1,      546, 0xcdeb3a49
++0,          3,          3,        1,      546, 0x5ab736b9
++0,          4,          4,        1,      546, 0x05233329
++0,          5,          5,        1,      546, 0x05233329
++0,          6,          6,        1,      546, 0xcb402f99
++0,          7,          7,        1,      546, 0x787c2bd9
++0,          8,          8,        1,      546, 0x78c82849
++0,          9,          9,        1,      546, 0x3f3525de
+diff --git a/tests/ref/fate/rv565-rgb565be_zlib_shift_k10 b/tests/ref/fate/rv565-rgb565be_zlib_shift_k10
+new file mode 100644
+index 0000000000..5cc935e891
+--- /dev/null
++++ b/tests/ref/fate/rv565-rgb565be_zlib_shift_k10
+@@ -0,0 +1,15 @@
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,      546, 0xcfa01133
++0,          1,          1,        1,      546, 0xb1220c8f
++0,          2,          2,        1,      546, 0xd4a00db3
++0,          3,          3,        1,      546, 0x2c970e59
++0,          4,          4,        1,      546, 0x3e050ddc
++0,          5,          5,        1,      546, 0x713d05d8
++0,          6,          6,        1,      546, 0x4f8506aa
++0,          7,          7,        1,      546, 0x7c7005ec
++0,          8,          8,        1,      546, 0x28e2043f
++0,          9,          9,        1,      546, 0x9b0b0459
 diff --git a/tests/ref/fate/rv565-rgb565le_stored_k3 b/tests/ref/fate/rv565-rgb565le_stored_k3
 new file mode 100644
 index 0000000000..4951dbb09b
@@ -2093,6 +2377,27 @@ index 0000000000..4951dbb09b
 +0,          7,          7,        1,      546, 0x82c62bd9
 +0,          8,          8,        1,      546, 0x86a22849
 +0,          9,          9,        1,      546, 0x511025de
+diff --git a/tests/ref/fate/rv565-rgb565le_stored_shift_k10 b/tests/ref/fate/rv565-rgb565le_stored_shift_k10
+new file mode 100644
+index 0000000000..4abac695bd
+--- /dev/null
++++ b/tests/ref/fate/rv565-rgb565le_stored_shift_k10
+@@ -0,0 +1,15 @@
++#tb 0: 1/12
++#media_type 0: video
++#codec_id 0: rawvideo
++#dimensions 0: 21x13
++#sar 0: 0/1
++0,          0,          0,        1,      546, 0xccfa1133
++0,          1,          1,        1,      546, 0xb4c60c8f
++0,          2,          2,        1,      546, 0xd65a0db3
++0,          3,          3,        1,      546, 0x358f0e59
++0,          4,          4,        1,      546, 0x442a0ddc
++0,          5,          5,        1,      546, 0x734a05d8
++0,          6,          6,        1,      546, 0x58d806aa
++0,          7,          7,        1,      546, 0x83ad05ec
++0,          8,          8,        1,      546, 0x2f1a043f
++0,          9,          9,        1,      546, 0xa1730459
 diff --git a/tests/ref/fate/rv565-rgb666_stored_k3 b/tests/ref/fate/rv565-rgb666_stored_k3
 new file mode 100644
 index 0000000000..c85d5ea8bb

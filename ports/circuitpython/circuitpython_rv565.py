@@ -9,7 +9,7 @@ Play RV565 video files on CircuitPython displays.
 RV565 (https://github.com/elixpo/rv565, arXiv:2610.35935) stores video as
 frames whose decoded bytes are already in the display's native pixel format.
 This module reads format version 7 (nine pixel formats, stored or zlib
-frames, keyframes, XOR deltas and repeats) and version 6 (big-endian RGB565,
+frames, keyframes, XOR deltas, partial deltas and repeats) and version 6 (big-endian RGB565,
 zlib, every frame a keyframe), and shows clips with ``displayio``
 (:class:`Player`) or straight over an ST7789's bus (:class:`DirectPlayer`).
 
@@ -79,7 +79,8 @@ ZLIB = 1
 KEYFRAME = 0
 DELTA = 1
 REPEAT = 2
-FRAME_TYPES = ("key", "delta", "repeat")
+PARTIAL = 3
+FRAME_TYPES = ("key", "delta", "repeat", "partial")
 
 # ST7789 / ILI9341 commands used by DirectPlayer.
 _CASET = 0x2A
@@ -133,6 +134,66 @@ def frame_size(pixel_format, width, height):
     else:
         raise RV565Error("unknown pixel format %r" % (pixel_format,))
     return row * height
+
+
+def frame_lines(pixel_format, width, height):
+    """``(P, R)``: a frame is ``P`` lines of ``R`` bytes, pixel rows for
+    formats 0-7 and pages of 8 rows for ``mono_vpage``. Partial deltas divide
+    the frame into bands of lines."""
+    if not isinstance(pixel_format, int):
+        if pixel_format not in PIXEL_FORMATS:
+            raise RV565Error("unknown pixel format %r" % (pixel_format,))
+        pixel_format = PIXEL_FORMATS.index(pixel_format)
+    if pixel_format == 8:
+        return (height + 7) // 8, width
+    return height, frame_size(pixel_format, width, 1)
+
+
+def _partial_layout(head, lines, line_bytes, shifts=None):
+    """Parse the start of a partial delta body: band height, band mask and
+    the band shifts.
+
+    :param head: the body from its start, at least through the band mask
+    :param shifts: the bytes after the mask (two per changed band); taken
+        from ``head`` when omitted
+    :return: ``(band, changed, shifts, data_offset, data_size)``: the band
+        height, the list of changed band numbers, a ``bytes`` of ``dx, dy``
+        pairs (as unsigned bytes) per changed band, where the encoded data
+        starts in the body, and how many bytes it decodes to
+    """
+    if len(head) < 1 or head[0] == 0:
+        raise RV565Error("partial delta with band height 0")
+    band = head[0]
+    count = (lines + band - 1) // band
+    mask_len = (count + 7) // 8
+    if len(head) < 1 + mask_len:
+        raise RV565Error("partial delta too short for its band mask")
+    changed = []
+    size = 0
+    for b in range(8 * mask_len):
+        if head[1 + (b >> 3)] >> (b & 7) & 1:
+            if b >= count:
+                raise RV565Error("partial delta sets a band past the frame")
+            changed.append(b)
+            end = (b + 1) * band
+            size += ((end if end < lines else lines) - b * band) * line_bytes
+    if not changed:
+        raise RV565Error("partial delta with no changed band")
+    start = 1 + mask_len + 2 * len(changed)
+    if shifts is None:
+        shifts = head[1 + mask_len : start]
+    if len(shifts) < 2 * len(changed):
+        raise RV565Error("partial delta too short for its band shifts")
+    shifts = bytes(shifts[: 2 * len(changed)])
+    for k in range(len(changed)):
+        dy = shifts[2 * k + 1]
+        if dy > 127:
+            dy -= 256
+        if dy >= band or -dy >= band:
+            raise RV565Error(
+                "partial delta shifts a band by %d lines, more than it has" % dy
+            )
+    return band, changed, shifts, start, size
 
 
 def parse_header(data, size=None):
@@ -195,9 +256,11 @@ _BIGINT = _probe_bigint()
 _XOR_CHUNK = 2048
 
 
-def _xor_into(dst, src):
-    """``dst[k] ^= src[k]`` for every byte; ``dst`` is a writable buffer."""
-    n = len(dst)
+def _xor_into(dst, src, dst_off=0, src_off=0, n=None):
+    """``dst[dst_off + k] ^= src[src_off + k]`` for ``k`` below ``n`` (default:
+    all of ``dst``); ``dst`` is a writable buffer."""
+    if n is None:
+        n = len(dst) - dst_off
     if _BIGINT:
         dv = memoryview(dst)
         sv = memoryview(src)
@@ -206,13 +269,16 @@ def _xor_into(dst, src):
             e = o + _XOR_CHUNK
             if e > n:
                 e = n
-            dv[o:e] = (
-                int.from_bytes(dv[o:e], "little") ^ int.from_bytes(sv[o:e], "little")
+            d = dst_off + o
+            t = src_off + o
+            dv[d : dst_off + e] = (
+                int.from_bytes(dv[d : dst_off + e], "little")
+                ^ int.from_bytes(sv[t : src_off + e], "little")
             ).to_bytes(e - o, "little")
             o = e
         return
     for k in range(n):
-        dst[k] ^= src[k]
+        dst[dst_off + k] ^= src[src_off + k]
 
 
 class _BytesSource:
@@ -265,8 +331,10 @@ class Clip:
     for the frame types in version 7), which also validates the rest of the
     container: every length is nonzero and inside the file, no bytes follow
     the last record, frame types are known, every ``K``-th frame is a
-    keyframe, repeats have no body and stored bodies are exactly one frame.
-    Whether a zlib body inflates to one frame is checked when it is decoded.
+    keyframe, repeats have no body, partial deltas have a valid band height
+    and mask, and stored bodies are exactly one frame (or, for a partial
+    delta, exactly its changed bands). Whether zlib data inflates to its
+    expected size is checked when it is decoded.
 
     Decoding keeps one frame buffer of :attr:`frame_bytes` bytes and returns
     it from :meth:`frame`; it is overwritten by the next call.
@@ -298,10 +366,15 @@ class Clip:
         self.pixel_format = PIXEL_FORMATS[self.pixel_format_id]
         self.codec = CODECS[self.codec_id]
         self.frame_bytes = frame_size(self.pixel_format_id, self.width, self.height)
+        self.lines, self.line_bytes = frame_lines(
+            self.pixel_format_id, self.width, self.height
+        )
         self._records = None  # offset of each record's length field
         self._types = None  # frame type per record (version 7 only)
         self._frame = None  # decoded frame buffer
-        self._scratch = None  # stored deltas read from a file
+        self._scratch = None  # stored (partial) deltas read from a file
+        self._band = None  # one band of a shifted partial delta
+        self._zeros = None  # one line of zeros
         self._pos = None  # index of the frame held in _frame
         self._decompress = decompress or _zlib_decompress
         self._sized_inflate = decompress is None  # try passing the output size
@@ -369,6 +442,13 @@ class Clip:
                 if kind == REPEAT:
                     if length != 1:
                         raise RV565Error("repeat frame %d has a body" % i)
+                elif kind == PARTIAL:
+                    _, _, _, start, want = self._layout(offset + 5, length - 1)
+                    if stored and length - 1 - start != want:
+                        raise RV565Error(
+                            "stored partial frame %d has %d bytes, expected %d"
+                            % (i, length - 1 - start, want)
+                        )
                 elif stored and length - 1 != frame_bytes:
                     raise RV565Error(
                         "stored frame %d has %d bytes, expected %d"
@@ -398,8 +478,32 @@ class Clip:
             end = self._source.size
         return start, end - start
 
+    def _layout(self, offset, length):
+        """:func:`_partial_layout` of the partial delta body at ``offset``:
+        reads the band height and mask, then the shifts of the changed
+        bands."""
+        head = (self.lines + 7) // 8 + 1  # the longest band mask, plus B
+        head = bytes(self._source.read(offset, length if length < head else head))
+        if len(head) < 1 or head[0] == 0:
+            return _partial_layout(head, self.lines, self.line_bytes)
+        mask_end = 1 + ((self.lines + head[0] - 1) // head[0] + 7) // 8
+        count = 0
+        for byte in head[1:mask_end]:
+            bits = byte
+            while bits:
+                count += bits & 1
+                bits >>= 1
+        want = 2 * count
+        if length - mask_end < want:
+            want = max(0, length - mask_end)
+        shifts = bytes(self._source.read(offset + mask_end, want)) if want else b""
+        return _partial_layout(head, self.lines, self.line_bytes, shifts)
+
+    def _kind(self, i):
+        return self._types[i] if self._types is not None else KEYFRAME
+
     def frame_type(self, i):
-        """``"key"``, ``"delta"`` or ``"repeat"``."""
+        """``"key"``, ``"delta"``, ``"repeat"`` or ``"partial"``."""
         self._check(i)
         return FRAME_TYPES[self._types[i] if self._types is not None else KEYFRAME]
 
@@ -413,6 +517,77 @@ class Clip:
                 i -= 1
         return i
 
+    def changed_lines(self, i):
+        """Line runs ``(first, count)`` that frame ``i`` changes from frame
+        ``i - 1``: every line for a keyframe or delta, none for a repeat, the
+        changed bands merged into runs for a partial delta. Lines are pixel
+        rows, or pages of 8 rows for ``mono_vpage`` (see :attr:`lines`)."""
+        self._check(i)
+        kind = self._kind(i)
+        if kind == REPEAT:
+            return []
+        if kind != PARTIAL:
+            return [(0, self.lines)]
+        offset, length = self._span(i)
+        band, changed, _, _, _ = self._layout(offset, length)
+        lines = self.lines
+        runs = []
+        for b in changed:
+            first = b * band
+            end = first + band
+            if end > lines:
+                end = lines
+            if runs and runs[-1][0] + runs[-1][1] == first:
+                runs[-1] = (runs[-1][0], end - runs[-1][0])
+            else:
+                runs.append((first, end - first))
+        return runs
+
+    def dirty_lines(self, since, i):
+        """Line runs that differ between frame ``since`` (what a display
+        shows) and frame ``i``, from the frame types and band masks alone:
+        the union of :meth:`changed_lines` of frames ``since + 1`` to ``i``.
+        Every line when ``since`` is ``None`` or after ``i``, or a keyframe or
+        delta lies between."""
+        self._check(i)
+        full = [(0, self.lines)]
+        if since is None or since > i:
+            return full
+        if since == i:
+            return []
+        runs = None
+        marks = None
+        for k in range(since + 1, i + 1):
+            kind = self._kind(k)
+            if kind == REPEAT:
+                continue
+            if kind != PARTIAL:
+                return full
+            more = self.changed_lines(k)
+            if runs is None:
+                runs = more
+                continue
+            if marks is None:
+                marks = bytearray(self.lines)
+                for first, count in runs:
+                    marks[first : first + count] = b"\x01" * count
+            for first, count in more:
+                marks[first : first + count] = b"\x01" * count
+        if marks is None:
+            return runs or []
+        runs = []
+        y = 0
+        lines = self.lines
+        while y < lines:
+            if marks[y]:
+                first = y
+                while y < lines and marks[y]:
+                    y += 1
+                runs.append((first, y - first))
+            else:
+                y += 1
+        return runs
+
     def payload_sizes(self):
         """Body length of every frame (0 for repeats), in order."""
         return [self._span(i)[1] for i in range(self.frame_count)]
@@ -425,7 +600,7 @@ class Clip:
 
     # -- decoding ------------------------------------------------------------
 
-    def _inflate(self, data):
+    def _inflate(self, data, size):
         if self._decompress is None:
             raise RV565Error(
                 "this CircuitPython build has no zlib module; use a board "
@@ -438,16 +613,19 @@ class Clip:
             # Builds that only take (data) raise TypeError once, and from then
             # on we call the one-argument form.
             try:
-                return self._decompress(data, 15, self.frame_bytes)
+                return self._decompress(data, 15, size)
             except TypeError:
                 self._sized_inflate = False
         return self._decompress(data)
 
-    def _body(self, i, into):
-        """Decode frame ``i``'s body. With ``into`` (a frame-sized buffer) a
-        stored body from a file is read straight into it; otherwise the body
-        is returned as a buffer of :attr:`frame_bytes` bytes."""
-        offset, length = self._span(i)
+    def _body(self, i, into, offset=None, length=None, size=None):
+        """Decode frame ``i``'s body (or the part of it at ``offset``, of
+        ``length`` bytes, decoding to ``size``). With ``into`` (a buffer of
+        ``size`` bytes) a stored body from a file is read straight into it;
+        otherwise the data is returned as a buffer of ``size`` bytes."""
+        if offset is None:
+            offset, length = self._span(i)
+            size = self.frame_bytes
         if self.codec_id == STORED:
             if into is not None:
                 self._source.readinto(offset, into)
@@ -455,34 +633,99 @@ class Clip:
             return self._source.read(offset, length)
         payload = self._source.read(offset, length)
         try:
-            data = self._inflate(payload)
+            data = self._inflate(payload, size)
         except MemoryError:
             raise
         except RV565Error:
             raise
         except Exception as exc:  # zlib.error, ValueError, OSError by port
             raise RV565Error("frame %d does not inflate: %s" % (i, exc))
-        if len(data) != self.frame_bytes:
+        if len(data) != size:
             raise RV565Error(
-                "frame %d inflates to %d bytes, expected %d"
-                % (i, len(data), self.frame_bytes)
+                "frame %d inflates to %d bytes, expected %d" % (i, len(data), size)
             )
         return data
 
+    def _decode_band(self, frame, data, pos, lo, hi, dx, dy):
+        """Decode one changed band, lines ``lo`` to ``hi - 1``, in place:
+        replace the previous frame's lines by their prediction (the band
+        shifted by ``dx`` bytes and ``dy`` lines, zero where that reaches
+        outside the band or the line), then XOR in the residual (``data``
+        from ``pos``). Returns where the next band's data starts."""
+        stride = self.line_bytes
+        n = (hi - lo) * stride
+        if dx or dy:
+            # Predict from a copy of the band, so the frame can be
+            # overwritten in place: one band of scratch.
+            if self._band is None or len(self._band) < n:
+                self._band = bytearray(n)
+            if self._zeros is None:
+                self._zeros = bytes(stride)
+            copy = memoryview(self._band)
+            fv = memoryview(frame)
+            copy[:n] = fv[lo * stride : hi * stride]
+            zeros = self._zeros
+            for y in range(lo, hi):
+                o = y * stride
+                src = y - dy
+                if not lo <= src < hi or dx >= stride or -dx >= stride:
+                    fv[o : o + stride] = zeros
+                    continue
+                s = (src - lo) * stride
+                if dx >= 0:
+                    fv[o : o + dx] = zeros[:dx]
+                    fv[o + dx : o + stride] = copy[s : s + stride - dx]
+                else:
+                    fv[o : o + stride + dx] = copy[s - dx : s + stride]
+                    fv[o + stride + dx : o + stride] = zeros[: -dx]
+        _xor_into(frame, data, lo * stride, pos, n)
+        return pos + n
+
     def _apply(self, i):
         """Turn the buffer holding frame ``i - 1`` into frame ``i``."""
-        kind = self._types[i] if self._types is not None else KEYFRAME
+        kind = self._kind(i)
         if kind == REPEAT:
             return
         frame = self._frame
+        from_file = self.codec_id == STORED and isinstance(self._source, _FileSource)
+        if kind == PARTIAL:
+            # XOR the decoded bands into their lines, in place; the decoded
+            # data is only as large as the changed bands.
+            offset, length = self._span(i)
+            band, changed, shifts, start, size = self._layout(offset, length)
+            into = None
+            if from_file:
+                if self._scratch is None:
+                    self._scratch = bytearray(self.frame_bytes)
+                into = memoryview(self._scratch)[:size]
+            data = self._body(i, into, offset + start, length - start, size)
+            lines = self.lines
+            pos = 0
+            for k, b in enumerate(changed):
+                lo = b * band
+                hi = lo + band
+                if hi > lines:
+                    hi = lines
+                dx = shifts[2 * k]
+                dy = shifts[2 * k + 1]
+                pos = self._decode_band(
+                    frame,
+                    data,
+                    pos,
+                    lo,
+                    hi,
+                    dx - 256 if dx > 127 else dx,
+                    dy - 256 if dy > 127 else dy,
+                )
+            return
         if kind == KEYFRAME:
-            if self.codec_id == STORED and isinstance(self._source, _FileSource):
+            if from_file:
                 self._body(i, frame)
             else:
                 frame[:] = self._body(i, None)
             return
         # Delta: XOR the decoded body into the previous frame, in place.
-        if self.codec_id == STORED and isinstance(self._source, _FileSource):
+        if from_file:
             if self._scratch is None:
                 self._scratch = bytearray(self.frame_bytes)
             body = self._body(i, self._scratch)
@@ -498,8 +741,8 @@ class Clip:
         Decoding the next frame applies one record; any other frame starts at
         the latest keyframe at or before it (at most ``K - 1`` records back).
 
-        Raises :class:`RV565Error` if a zlib body does not inflate to exactly
-        :attr:`frame_bytes` bytes.
+        Raises :class:`RV565Error` if zlib data does not inflate to exactly
+        :attr:`frame_bytes` bytes (for a partial delta, its changed bands).
         """
         self._check(i)
         types = self._types
@@ -612,6 +855,8 @@ class PlayStats:
     :ivar skipped: frames dropped to keep up with the clip's rate
     :ivar repeated: frames shown at no cost because the screen already held
         their picture (repeat frames)
+    :ivar rows_updated: pixel rows written to the bitmap or sent to the
+        panel; partial deltas update only their changed rows
     :ivar elapsed: wall time in seconds
     :ivar decode_time: seconds spent inflating
     :ivar draw_time: seconds spent filling the bitmap and refreshing
@@ -622,6 +867,7 @@ class PlayStats:
         self.shown = 0
         self.skipped = 0
         self.repeated = 0
+        self.rows_updated = 0
         self.elapsed = 0.0
         self.decode_time = 0.0
         self.draw_time = 0.0
@@ -635,7 +881,7 @@ class PlayStats:
         per = self.shown or 1
         return (
             "<PlayStats %.2f of %d FPS: %d shown (%d repeats), %d skipped in "
-            "%.2f s; %.1f ms decode + %.1f ms draw per frame>"
+            "%.2f s; %d rows updated; %.1f ms decode + %.1f ms draw per frame>"
             % (
                 self.fps,
                 self.target_fps,
@@ -643,6 +889,7 @@ class PlayStats:
                 self.repeated,
                 self.skipped,
                 self.elapsed,
+                self.rows_updated,
                 1000 * self.decode_time / per,
                 1000 * self.draw_time / per,
             )
@@ -657,6 +904,7 @@ class _Pacer:
         self._clock = clock or _Clock()
         self._sleep = sleep or _default_sleep
         self._shown_content = None  # content_index of the picture on screen
+        self.last_rows = 0  # rows the last show() updated
 
     def show(self, i):
         """Decode and draw frame ``i``; return (decode_s, draw_s)."""
@@ -704,8 +952,10 @@ class _Pacer:
                 # decode or send.
                 stats.repeated += 1
             else:
+                self.last_rows = 0
                 decode_s, draw_s = self.show(index)
                 self._shown_content = content
+                stats.rows_updated += self.last_rows
                 stats.decode_time += decode_s
                 stats.draw_time += draw_s
             stats.shown += 1
@@ -737,6 +987,7 @@ _PLAYER_FORMATS = {
     6: (16, 4, 1, True),  # gray4, high nibble first
     7: (2, 1, 1, True),  # mono, most significant bit first
 }
+_BAND_ROWS = 8  # rows per scratch bitmap for partial updates
 PLAYER_FORMATS = ("rgb565be", "rgb565le", "gray8", "gray4", "mono")
 DIRECT_FORMATS = ("rgb565be", "rgb666")
 
@@ -794,10 +1045,27 @@ class Player(_Pacer):
         if BytesIO is None:
             self._readinto = None
         self._bytesio = BytesIO
+        # bitmaptools.blit (CircuitPython 9+) or Bitmap.blit (8.x), to copy
+        # a scratch band into the bitmap for partial updates.
+        blit = getattr(bitmaptools, "blit", None)
+        if blit is not None:
+            self._blit = lambda dest, src, y, rows: blit(
+                dest, src, 0, y, x1=0, y1=0, x2=src.width, y2=rows
+            )
+        else:
+            self._blit = None
+        self._band = None  # scratch bitmaps for partial updates
+        self._row = None
+        self._displayio = displayio
 
         values, self._bits, self._element, self._msb_first = _PLAYER_FORMATS[fmt]
         self.display = display
+        self._values = values
         self.bitmap = displayio.Bitmap(clip.width, clip.height, values)
+        if self._blit is None and hasattr(self.bitmap, "blit"):
+            self._blit = lambda dest, src, y, rows: dest.blit(
+                0, y, src, x1=0, y1=0, x2=src.width, y2=rows
+            )
         if fmt == 0:
             self.converter = displayio.ColorConverter(
                 input_colorspace=displayio.Colorspace.RGB565_SWAPPED
@@ -823,8 +1091,17 @@ class Player(_Pacer):
         if display is not None:
             display.root_group = self.group
 
-    def blit(self, frame):
-        """Copy one decoded frame (bytes in the clip's format) into :attr:`bitmap`."""
+    def blit(self, frame, runs=None):
+        """Copy one decoded frame (bytes in the clip's format) into :attr:`bitmap`.
+
+        :param runs: row runs ``(first, count)`` to copy; all rows if ``None``.
+            Only those rows of the bitmap change, so ``displayio`` refreshes
+            only that area.
+        """
+        if runs is not None and runs != [(0, self.bitmap.height)]:
+            for first, count in runs:
+                self._blit_rows(frame, first, count)
+            return
         if self._readinto is not None:
             # One C call: reads the rows into the bitmap, handling both the
             # file's row padding and the bitmap's.
@@ -836,38 +1113,90 @@ class Player(_Pacer):
                 reverse_pixels_in_element=self._msb_first,
             )
             return
-        # Fallback without bitmaptools.readinto: one Python step per pixel,
-        # far slower, but correct.
+        self._slow_rows(frame, 0, self.bitmap.height)
+
+    def _blit_rows(self, frame, first, count):
+        """Copy rows ``first`` to ``first + count - 1`` of ``frame`` into the
+        bitmap: ``readinto`` into a small scratch bitmap, then ``blit`` it."""
+        if self._readinto is None or self._blit is None:
+            self._slow_rows(frame, first, first + count)
+            return
+        stride = self.clip.line_bytes
+        view = memoryview(frame)
+        y = first
+        end = first + count
+        while y < end:
+            if end - y >= _BAND_ROWS:
+                if self._band is None:
+                    self._band = self._new_bitmap(_BAND_ROWS)
+                scratch = self._band
+            else:
+                if self._row is None:
+                    self._row = self._new_bitmap(1)
+                scratch = self._row
+            rows = scratch.height
+            self._readinto(
+                scratch,
+                self._bytesio(view[y * stride : (y + rows) * stride]),
+                bits_per_pixel=self._bits,
+                element_size=self._element,
+                reverse_pixels_in_element=self._msb_first,
+            )
+            self._blit(self.bitmap, scratch, y, rows)
+            y += rows
+
+    def _slow_rows(self, frame, first, end):
+        """Fallback without bitmaptools: one Python step per pixel, far
+        slower, but correct."""
         bitmap = self.bitmap
         bits = self._bits
-        if bits == 16:
-            for i in range(len(frame) // 2):
-                bitmap[i] = frame[2 * i] | (frame[2 * i + 1] << 8)
-        elif bits == 8:
-            for i in range(len(frame)):
-                bitmap[i] = frame[i]
-        else:
-            width = bitmap.width
-            per = 8 // bits
-            stride = (width + per - 1) // per
-            mask = (1 << bits) - 1
-            for y in range(bitmap.height):
+        width = bitmap.width
+        stride = self.clip.line_bytes
+        if bits >= 8:
+            step = bits // 8
+            for y in range(first, end):
                 row = y * stride
                 for x in range(width):
-                    shift = 8 - bits * (x % per + 1)
-                    bitmap[x, y] = (frame[row + x // per] >> shift) & mask
+                    p = row + step * x
+                    if step == 2:
+                        bitmap[x, y] = frame[p] | (frame[p + 1] << 8)
+                    else:
+                        bitmap[x, y] = frame[p]
+            return
+        per = 8 // bits
+        mask = (1 << bits) - 1
+        for y in range(first, end):
+            row = y * stride
+            for x in range(width):
+                shift = 8 - bits * (x % per + 1)
+                bitmap[x, y] = (frame[row + x // per] >> shift) & mask
+
+    def _new_bitmap(self, rows):
+        return self._displayio.Bitmap(self.clip.width, rows, self._values)
 
     def show(self, i):
         """Decode frame ``i``, draw it, and refresh the display.
 
+        Only the rows that differ from the picture already in the bitmap are
+        copied (:meth:`Clip.dirty_lines`): after a partial delta, its changed
+        bands; :attr:`last_rows` says how many.
+
         :return: ``(decode_seconds, draw_seconds)``
         """
         clock = self._clock
+        clip = self.clip
+        runs = clip.dirty_lines(self._shown_content, i)
         t0 = clock()
-        frame = self.clip.frame(i)
+        frame = clip.frame(i)
         t1 = clock()
-        self.blit(frame)
-        self._shown_content = self.clip.content_index(i)
+        self._shown_content = clip.content_index(i)
+        rows = 0
+        for _, count in runs:
+            rows += count
+        self.last_rows = rows
+        if not rows:
+            return t1 - t0, clock() - t1
+        self.blit(frame, runs)
         if self.display is not None and not getattr(self.display, "auto_refresh", True):
             self.display.refresh()
         return t1 - t0, clock() - t1
@@ -972,22 +1301,45 @@ class DirectPlayer(_Pacer):
         y0 = (panel_height - clip.height) // 2 + y_offset
         self._caset = struct.pack(">HH", x0, x0 + clip.width - 1)
         self._raset = struct.pack(">HH", y0, y0 + clip.height - 1)
+        self._y0 = y0
 
     def show(self, i):
         """Decode frame ``i`` and send it to the panel.
+
+        Sends only the rows that differ from the picture on the panel
+        (:meth:`Clip.dirty_lines`): the whole frame after a keyframe or
+        delta, and after a partial delta one row window and write per run of
+        changed bands; :attr:`last_rows` says how many rows went out.
 
         Called on its own, outside :meth:`play`, it does not send MADCTL;
         call :meth:`begin` first.
         """
         clock = self._clock
+        clip = self.clip
+        runs = clip.dirty_lines(self._shown_content, i)
         t0 = clock()
-        frame = self.clip.frame(i)
+        frame = clip.frame(i)
         t1 = clock()
+        self._shown_content = clip.content_index(i)
         bus = self.bus
-        bus.send(_CASET, self._caset)
-        bus.send(_RASET, self._raset)
-        bus.send(_RAMWR, frame)
-        self._shown_content = self.clip.content_index(i)
+        rows = 0
+        if runs == [(0, clip.height)]:
+            bus.send(_CASET, self._caset)
+            bus.send(_RASET, self._raset)
+            bus.send(_RAMWR, frame)
+            rows = clip.height
+        elif runs:
+            bus.send(_CASET, self._caset)
+            view = memoryview(frame)
+            stride = clip.line_bytes
+            y0 = self._y0
+            for first, count in runs:
+                bus.send(
+                    _RASET, struct.pack(">HH", y0 + first, y0 + first + count - 1)
+                )
+                bus.send(_RAMWR, view[first * stride : (first + count) * stride])
+                rows += count
+        self.last_rows = rows
         return t1 - t0, clock() - t1
 
     def begin(self):

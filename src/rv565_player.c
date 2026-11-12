@@ -23,7 +23,8 @@ rv565_status_t rv565_player_init(rv565_player_t *p)
      * do through a scratch buffer as large as a second frame. */
     if (p->frames[1] == NULL && h->codec == RV565_CODEC_ZLIB) {
         for (uint16_t i = 0; i < h->frames; ++i) {
-            if (rv565_frame_type(p->clip, i) == RV565_FRAME_DELTA) {
+            const int type = rv565_frame_type(p->clip, i);
+            if (type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL) {
                 return RV565_ERR_ARG;
             }
         }
@@ -32,35 +33,40 @@ rv565_status_t rv565_player_init(rv565_player_t *p)
     rv565_build_map(p->ymap, h->height, p->panel_height);
     p->current = 0;
     p->held[0] = p->held[1] = -1;
-    p->gen[0] = p->gen[1] = 0;
-    p->sent = -1;
-    p->sent_gen = 0;
+    p->shown = -1;
     p->ready_inflate_us = 0;
     return RV565_OK;
 }
 
-/* Scale and transfer one decoded frame through the two stripes. Scaling of
- * stripe n+1 overlaps the DMA transfer of stripe n. */
-static void send_frame(rv565_player_t *p, const uint8_t *frame, rv565_frame_stats_t *s)
+/* Scale and transfer panel rows [first_row, first_row + count) of one
+ * decoded frame through the two stripes. Scaling of stripe n+1 overlaps the
+ * DMA transfer of stripe n. */
+static void send_rows(rv565_player_t *p, const uint8_t *frame, uint16_t first_row,
+                      uint16_t count, rv565_frame_stats_t *s)
 {
     const rv565_header_t *h = &p->clip->header;
     const size_t stripe_row_bytes = (size_t)p->panel_width * 2u;
     const uint32_t start = p->micros();
+    const uint16_t end_row = (uint16_t)(first_row + count);
 
-    p->display.begin_frame(p->display.ctx);
+    if (first_row == 0 && count == p->panel_height) {
+        p->display.begin_frame(p->display.ctx);
+    } else {
+        p->display.begin_rows(p->display.ctx, first_row, count);
+    }
     int current = 0;
-    uint16_t row = 0;
-    uint16_t rows = p->stripe_rows < p->panel_height ? p->stripe_rows : p->panel_height;
+    uint16_t row = first_row;
+    uint16_t rows = p->stripe_rows < count ? p->stripe_rows : count;
 
     uint32_t t = p->micros();
     rv565_scale_stripe(frame, h->width, p->xmap, p->panel_width, p->ymap, row, rows, p->stripes[current]);
     s->scale_us += p->micros() - t;
 
-    while (row < p->panel_height) {
+    while (row < end_row) {
         p->display.queue_stripe(p->display.ctx, p->stripes[current], rows * stripe_row_bytes);
         const uint16_t next_row = (uint16_t)(row + rows);
-        const uint16_t left = (uint16_t)(p->panel_height - next_row);
-        const uint16_t next_rows = next_row < p->panel_height
+        const uint16_t left = (uint16_t)(end_row - next_row);
+        const uint16_t next_rows = next_row < end_row
             ? (left < p->stripe_rows ? left : p->stripe_rows) : 0;
         if (next_rows != 0) {
             t = p->micros();
@@ -76,7 +82,100 @@ static void send_frame(rv565_player_t *p, const uint8_t *frame, rv565_frame_stat
         current ^= 1;
     }
     p->display.end_frame(p->display.ctx);
-    s->transfer_us = p->micros() - start;
+    s->transfer_us += p->micros() - start;
+    s->rows_sent = (uint16_t)(s->rows_sent + count);
+}
+
+/* First panel row whose source line is >= line (panel_height if none). */
+static uint16_t row_for_line(const rv565_player_t *p, uint32_t line)
+{
+    uint16_t lo = 0, hi = p->panel_height;
+    while (lo < hi) {
+        const uint16_t mid = (uint16_t)((lo + hi) / 2u);
+        if (p->ymap[mid] < line) {
+            lo = (uint16_t)(mid + 1u);
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* Source lines that differ between the frame on the panel (p->shown) and
+ * frame `index`, as at most RV565_PLAYER_MAX_RUNS runs. Returns 0 when the
+ * whole frame must be sent, 1 otherwise (*count may be 0: nothing changed). */
+static int changed_since_shown(const rv565_player_t *p, uint16_t index,
+                               rv565_line_run_t *runs, size_t *count)
+{
+    *count = 0;
+    if (p->shown < 0 || p->shown > (int32_t)index ||
+            (int32_t)index - p->shown > RV565_PLAYER_MAX_CATCHUP) {
+        return 0;
+    }
+    if ((int32_t)index == p->shown) {
+        return 1;
+    }
+    if ((int32_t)index == p->shown + 1) {
+        return rv565_changed_lines(p->clip, index, runs, RV565_PLAYER_MAX_RUNS, count) == RV565_OK;
+    }
+    /* Several records since the panel was drawn: send the envelope of all
+     * their changes (a superset of the lines that differ). */
+    uint32_t first = UINT32_MAX, end = 0;
+    for (uint32_t j = (uint32_t)p->shown + 1u; j <= index; ++j) {
+        size_t n;
+        if (rv565_changed_lines(p->clip, (uint16_t)j, runs, RV565_PLAYER_MAX_RUNS, &n) != RV565_OK) {
+            return 0;
+        }
+        if (n != 0) {
+            if (runs[0].first < first) first = runs[0].first;
+            if ((uint32_t)runs[n - 1].first + runs[n - 1].count > end) {
+                end = (uint32_t)runs[n - 1].first + runs[n - 1].count;
+            }
+        }
+    }
+    if (end != 0) {
+        runs[0].first = (uint16_t)first;
+        runs[0].count = (uint16_t)(end - first);
+        *count = 1;
+    }
+    return 1;
+}
+
+/* Send what changed on the panel for the frame in `frame`. */
+static void present_rows(rv565_player_t *p, uint16_t index, const uint8_t *frame,
+                         rv565_frame_stats_t *s)
+{
+    rv565_line_run_t runs[RV565_PLAYER_MAX_RUNS];
+    size_t count;
+    const int known = changed_since_shown(p, index, runs, &count);
+    if (known && count == 0) {
+        return;  /* the panel already shows these pixels */
+    }
+    if (!known || p->display.begin_rows == NULL) {
+        send_rows(p, frame, 0, p->panel_height, s);  /* no row window: full write */
+        return;
+    }
+    /* Map source-line runs to panel rows; adjacent row ranges merge. */
+    uint16_t pend_first = 0, pend_end = 0;
+    for (size_t r = 0; r < count; ++r) {
+        const uint16_t d0 = row_for_line(p, runs[r].first);
+        const uint16_t d1 = row_for_line(p, (uint32_t)runs[r].first + runs[r].count);
+        if (d0 == d1) {
+            continue;  /* scaled away */
+        }
+        if (pend_end == d0 && pend_end != pend_first) {
+            pend_end = d1;
+            continue;
+        }
+        if (pend_end != pend_first) {
+            send_rows(p, frame, pend_first, (uint16_t)(pend_end - pend_first), s);
+        }
+        pend_first = d0;
+        pend_end = d1;
+    }
+    if (pend_end != pend_first) {
+        send_rows(p, frame, pend_first, (uint16_t)(pend_end - pend_first), s);
+    }
 }
 
 /* Decode one record synchronously on the critical path. */
@@ -135,7 +234,6 @@ static rv565_status_t bring(rv565_player_t *p, uint16_t index, int *out,
         }
         const int dst = buffers == 2 ? b ^ 1 : b;
         p->held[dst] = -1;
-        ++p->gen[dst];
         uint32_t us = 0;
         const rv565_status_t status = decode_one(p, (uint16_t)j, p->frames[b], p->frames[dst], &us);
         s->inflate_us += us;
@@ -178,19 +276,15 @@ rv565_status_t rv565_player_present(rv565_player_t *p, uint16_t index,
                          rv565_frame_type(p->clip, next) != RV565_FRAME_REPEAT;
     if (prefetch) {
         p->held[other] = -1;
-        ++p->gen[other];
         p->decoder.start(p->decoder.ctx, next, p->frames[b], p->frames[other],
                          rv565_frame_bytes(h));
     }
 
-    /* A frame whose pixels are already on the panel (a repeat, or the same
-     * frame again) is not sent. */
-    if (p->sent != b || p->sent_gen != p->gen[b]) {
-        send_frame(p, p->frames[b], s);
-        p->sent = b;
-        p->sent_gen = p->gen[b];
-        s->sent = 1;
-    }
+    /* Send only the rows that changed since the frame on the panel: nothing
+     * for a repeat or the same frame again, the changed bands of a partial
+     * delta, everything for a keyframe or delta. */
+    present_rows(p, index, p->frames[b], s);
+    p->shown = index;
 
     if (prefetch) {
         status = p->decoder.finish(p->decoder.ctx, &p->ready_inflate_us);
