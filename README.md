@@ -308,7 +308,11 @@ OreoOS under MIT.
   and in the [CircuitPython Community Bundle](https://github.com/adafruit/CircuitPython_Community_Bundle)
   (`circup install circuitpython_rv565`)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+- Detected by `file(1)`: the magic entry was committed upstream
+  ([bugs.astron.com #822](https://bugs.astron.com/view.php?id=822)) and ships
+  in the next `file` release
 - Listed in [Awesome Raspberry Pi](https://github.com/thibmaek/awesome-raspberry-pi#projects)
+  and [Awesome CircuitPython](https://github.com/adafruit/awesome-circuitpython)
 
 **Written about**
 
@@ -326,8 +330,6 @@ OreoOS under MIT.
   [FFmpeg #25653](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/25653)
 - The `video/x-rv565` MIME type in freedesktop shared-mime-info:
   [!449](https://gitlab.freedesktop.org/xdg/shared-mime-info/-/merge_requests/449)
-- A `file(1)` magic entry: [bugs.astron.com #819](https://bugs.astron.com/view.php?id=819),
-  with the patch in [#822](https://bugs.astron.com/view.php?id=822)
 - PRONOM, the National Archives' format registry:
   [PRONOM_Research #202](https://github.com/digital-preservation/PRONOM_Research/pull/202)
 - A Kaitai Struct format description:
@@ -340,9 +342,8 @@ OreoOS under MIT.
 - A proposed article for the Espressif Developer Portal:
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)
 - Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67),
-  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92),
-  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235) and
-  [awesome-circuitpython #63](https://github.com/adafruit/awesome-circuitpython/pull/63)
+  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92) and
+  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235)
 
 Using RV565 in a project? Tell us in
 [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell)
