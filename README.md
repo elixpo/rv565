@@ -308,6 +308,8 @@ OreoOS under MIT.
   and in the [CircuitPython Community Bundle](https://github.com/adafruit/CircuitPython_Community_Bundle)
   (`circup install circuitpython_rv565`)
 - [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+- An example in [Arduino_GFX](https://github.com/moononournation/Arduino_GFX/tree/master/examples/ImgViewer/ImgViewerRv565),
+  the display library for Arduino: `ImgViewerRv565`
 - Detected by `file(1)`: the magic entry was committed upstream
   ([bugs.astron.com #822](https://bugs.astron.com/view.php?id=822)) and ships
   in the next `file` release
@@ -334,7 +336,6 @@ OreoOS under MIT.
   [PRONOM_Research #202](https://github.com/digital-preservation/PRONOM_Research/pull/202)
 - A Kaitai Struct format description:
   [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
-- An Arduino_GFX example: [Arduino_GFX #823](https://github.com/moononournation/Arduino_GFX/pull/823)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
 - An `lv_rv565` widget for LVGL, modelled on `lv_gif`:
