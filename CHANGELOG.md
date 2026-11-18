@@ -3,6 +3,15 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## 2.0.1 — 2026-11-19
+
+Documentation only; the format, encoder, decoders and players are unchanged.
+OreoOS, the operating system RV565 was built for, is now FaleraOS (the badge
+is the Elixpo Falera Badge), so the READMEs, docs and links name FaleraOS,
+elixpo/falera and falera.elixpo.com (the converter is at
+https://falera.elixpo.com/rv565/convert/). Released on every channel so the
+Arduino, ESP Component Registry and PyPI pages show the new text.
+
 ## 2.0.0 — 2026-11-12
 
 Version 2.0.0 introduces RV565 format version 7 (`docs/FORMAT.md`): the
