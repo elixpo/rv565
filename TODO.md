@@ -63,7 +63,7 @@ Upstream reviews first, then listings, then posts. 🤖 = Claude drafts,
     no cheap video); 🙋 post on the LVGL forum first to check interest.
 15. **Awesome lists**: 🤖 one-line PRs for RV565 itself in awesome-esp,
     awesome-micropython and awesome-raspberry-pi-pico (the existing entries
-    are for OreoOS).
+    are for FaleraOS).
 16. **Raspberry Pi**: 🙋 a forum post (Projects) and a news tip, after item 9,
     with the Pico numbers and the RP2350 HSTX measurements. A `pico-examples`
     PR would likely be declined, so skip it.

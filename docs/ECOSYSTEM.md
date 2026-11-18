@@ -30,7 +30,7 @@ subset.
 
 ### Library foundation
 
-- [x] History of the RV565 files extracted from OreoOS (8 commits) as the base of this repository.
+- [x] History of the RV565 files extracted from OreoOS (now FaleraOS, 8 commits) as the base of this repository.
 - [x] Portable core: parsing, validation, O(1) index, exact-length inflate, scaler, cost model, schedulability, pacer.
 - [x] Player: stripe pipeline with optional second-core decoding.
 - [x] Bundled inflate-only miniz with `rv565_`-prefixed symbols.

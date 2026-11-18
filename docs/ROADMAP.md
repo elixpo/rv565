@@ -81,7 +81,7 @@ without C. Pure Python, so a few FPS rather than 24.
 - [ ] 🤖 Then: own `CircuitPython_RV565` repository with the cookiecutter CI,
       and a PR to the Adafruit CircuitPython Community Bundle.
 
-### 1.4 Online converter on oreo.elixpo
+### 1.4 Online converter on falera.elixpo
 
 A free page that turns a video into an `.rv565` (or an Arduino `clip.h`) in
 the browser. It removes the biggest hurdle today: needing FFmpeg and Python.
@@ -108,7 +108,7 @@ Tasks:
       reference vector frame for frame, its files pass `rv565 verify`, and its
       `clip.h` is byte-identical to the CLI's (zlib output itself differs by
       implementation, so files are compared by decoded frames).
-- [x] 🤖 Page `oreo.elixpo/rv565/convert` (OreoOS repo), in the existing
+- [x] 🤖 Page `falera.elixpo/rv565/convert` (FaleraOS repo), in the existing
       research style, linked from the paper page and this README.
 - [x] 🤖 SEO: title/description aimed at what people search for ("MP4 to
       RGB565 converter", "play video on ESP32 ST7789"), JSON-LD

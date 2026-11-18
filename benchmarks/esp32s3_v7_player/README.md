@@ -1,6 +1,6 @@
-# Version 7 playback on the Oreo Badge
+# Version 7 playback on the Falera Badge
 
-Measures RV565 version 7 clips on the Oreo Badge (ESP32-S3 N16R8, 2.0"
+Measures RV565 version 7 clips on the Falera Badge (ESP32-S3 N16R8, 2.0"
 320x240 ST7789 on SPI at 40 MHz, the badge's pins). It plays one embedded clip
 through the library's player, dual-core (inflate on core 1) or serial, and
 prints one line per pass through the clip:
@@ -16,7 +16,7 @@ pass 2: 240 presented, 0 late, 0 skipped | work mean 31.40 max 31.52 ms | transf
   Partial deltas send only the rows of their changed bands, repeats nothing.
 
 The benchmark uses the badge's partition table, so it overwrites only the app
-partition: the OreoOS files in `vfs` stay. Afterwards, flash the OreoOS
+partition: the FaleraOS files in `vfs` stay. Afterwards, flash the FaleraOS
 firmware again to get the badge back. The app, clip included, must fit in
 2.25 MiB, which holds about 15 seconds of 180x135 film.
 

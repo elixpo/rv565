@@ -97,7 +97,7 @@ step 1.
 Making clips
 ------------
 
-Use the `online converter <https://oreo.elixpo.com/rv565/convert/>`_, which
+Use the `online converter <https://falera.elixpo.com/rv565/convert/>`_, which
 runs in your browser, or the Python tool::
 
     pip install rv565

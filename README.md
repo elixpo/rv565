@@ -28,7 +28,7 @@ independent zlib stream of RGB565, still play.
   pixel-exact, and a UI animation is lossless at 6% of MJPEG's size
   ([results](docs/RESULTS_V7.md)).
 - **Only changed rows go to the display**: partial deltas send just the bands
-  that changed. On the Oreo Badge (ESP32-S3) that halved the mean frame time
+  that changed. On the Falera Badge (ESP32-S3) that halved the mean frame time
   of a UI animation, 31.4 → 14.8 ms, and cut film by 12%, with every frame on
   time ([measurements](docs/RESULTS_V7.md#on-the-badge-esp32-s3)).
 - **Schedulability from the file alone**: inflate time is linear in the stored
@@ -49,7 +49,7 @@ MicroPython-Class ESP32-S3 Systems*
 ## Use .rv565 for your video
 
 1. **Make the file** from any video: in the
-   [online converter](https://oreo.elixpo.com/rv565/convert/) (runs in your
+   [online converter](https://falera.elixpo.com/rv565/convert/) (runs in your
    browser, nothing is uploaded), or with `pip install rv565` and
    `rv565 encode input.mp4 clip.rv565` (needs FFmpeg).
 2. **Check it before you flash it:**
@@ -90,7 +90,7 @@ MicroPython-Class ESP32-S3 Systems*
 | RP2040 (Pico) | as RP2350 | Compiles; not yet run on hardware |
 | CircuitPython (ESP32-S3, RP2350, ...) | copy `ports/circuitpython/circuitpython_rv565.py` to `CIRCUITPY/lib` ([guide](ports/circuitpython/README.rst)) | Experimental: pure Python, a few FPS; host-tested, not yet run on a board |
 | Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
-| Browser | [Online converter](https://oreo.elixpo.com/rv565/convert/) | No install, no upload |
+| Browser | [Online converter](https://falera.elixpo.com/rv565/convert/) | No install, no upload |
 
 Arduino: install *RV565* from the Library Manager, or run
 `arduino-cli lib install RV565`. ESP-IDF: the component is on the
@@ -133,7 +133,7 @@ pip install "rv565[pillow]"  # plus the Pillow plugin
 It gives the `rv565` command (encode, info, verify, c-array) and a small
 library; with Pillow, `Image.open("clip.rv565")` opens clips as animations.
 See [python/](python/README.md). No Python? Use the
-[online converter](https://oreo.elixpo.com/rv565/convert/), which runs in the
+[online converter](https://falera.elixpo.com/rv565/convert/), which runs in the
 browser.
 
 ## CircuitPython (experimental)
@@ -287,12 +287,13 @@ and the Pico SDK example, and lints the library for the Arduino Library Manager.
 
 ## Where RV565 is
 
-**First device: the [Oreo Badge](https://github.com/elixpo/oreo).** RV565 was
-built for the Gallery app of OreoOS, the MicroPython operating system of the
-Oreo Badge, an ESP32-S3 conference badge. The badge is
+**First device: the [Falera Badge](https://github.com/elixpo/falera).** RV565 was
+built for the Gallery app of FaleraOS (formerly OreoOS), the MicroPython
+operating system of the Elixpo Falera Badge, an ESP32-S3 conference badge.
+The badge is
 [certified open source hardware](https://certification.oshwa.org/in000107.html)
 by OSHWA (UID IN000107); its hardware is licensed under CERN-OHL-P-2.0 and
-OreoOS under MIT.
+FaleraOS under MIT.
 
 **Published**
 
@@ -307,7 +308,7 @@ OreoOS under MIT.
   [Read the Docs](https://circuitpython-rv565.readthedocs.io)
   and in the [CircuitPython Community Bundle](https://github.com/adafruit/CircuitPython_Community_Bundle)
   (`circup install circuitpython_rv565`)
-- [Online converter](https://oreo.elixpo.com/rv565/convert/), in the browser
+- [Online converter](https://falera.elixpo.com/rv565/convert/), in the browser
 - An example in [Arduino_GFX](https://github.com/moononournation/Arduino_GFX/tree/master/examples/ImgViewer/ImgViewerRv565),
   the display library for Arduino: `ImgViewerRv565`
 - Detected by `file(1)`: the magic entry was committed upstream
@@ -321,7 +322,7 @@ OreoOS under MIT.
 - Adafruit blog:
   [*RV565: frame-independent RGB565 video for ESP32-S3 and RP2350 SPI displays*](https://blog.adafruit.com/2026/11/10/rv565-frame-independent-rgb565-video-for-esp32-s3-and-rp2350-spi-displays/)
   (10 Nov 2026)
-- How it started, in OreoOS's Gallery:
+- How it started, in FaleraOS's Gallery:
   [*From 0.5 FPS to Native Video*](https://blogs.elixpo.com/elixpohere/esp32s3-spiderman)
 - Write-up of the Pico 2 port:
   [*The Screen Was Blank*](https://blogs.elixpo.com/elixpohere/rv565-pico-2-tweak)
@@ -350,12 +351,12 @@ Using RV565 in a project? Tell us in
 [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell)
 and we will list it here.
 
-## The Oreo family
+## The Falera family
 
 One project in three repositories, grouped under the
 [`oreo-badge`](https://github.com/orgs/elixpo/repositories?q=topic%3Aoreo-badge) topic:
 
-- [elixpo/oreo](https://github.com/elixpo/oreo): the Oreo Badge hardware, OreoOS and the `oreo` CLI
+- [elixpo/falera](https://github.com/elixpo/falera): the Falera Badge hardware, FaleraOS and the `falera` CLI
 - [elixpo/rv565](https://github.com/elixpo/rv565): RV565, the badge's video format (C library, encoder, Arduino, ESP-IDF and Pico SDK)
 - [elixpo/CircuitPython_RV565](https://github.com/elixpo/CircuitPython_RV565): RV565 playback for CircuitPython
 

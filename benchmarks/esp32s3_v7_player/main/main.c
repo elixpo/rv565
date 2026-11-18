@@ -1,4 +1,4 @@
-/* RV565 version 7 playback benchmark for the Oreo Badge.
+/* RV565 version 7 playback benchmark for the Falera Badge.
  *
  * Plays the embedded clip forever on the badge's 320x240 ST7789 (40 MHz SPI,
  * pins as on the badge) and prints one line per pass through the clip:
