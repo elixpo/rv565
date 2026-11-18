@@ -1,4 +1,4 @@
-// Firmware-resident RV565 frame decoding for OreoOS on ESP32-S3.
+// Firmware-resident RV565 frame decoding for FaleraOS on ESP32-S3.
 //
 // The Python side parses the container (version 6 or 7, see docs/FORMAT.md)
 // and hands each frame body to this module, which decodes it into a reused

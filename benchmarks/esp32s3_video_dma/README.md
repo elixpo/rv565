@@ -1,6 +1,6 @@
 # ESP32-S3 24 FPS DMA video benchmark
 
-This is a standalone ESP-IDF firmware, not an OreoOS app. It boots directly
+This is a standalone ESP-IDF firmware, not a FaleraOS app. It boots directly
 into a full-screen video loop and leaves Wi-Fi, Bluetooth, MicroPython, the app
 launcher, and the normal framebuffer out of the measurement.
 
@@ -20,7 +20,7 @@ to the encoder to produce the uncompressed RV565 v5 baseline.
 
 ## 1. Back up the complete current badge flash
 
-This benchmark replaces MicroPython, its partition table, and OreoOS. The
+This benchmark replaces MicroPython, its partition table, and FaleraOS. The
 backup is the reliable route back to the exact current badge state.
 
 ```bash
@@ -112,7 +112,7 @@ python -m esptool --chip esp32s3 --port /dev/ttyACM0 write_flash \
   0x0 oreo-full-backup.bin
 ```
 
-If the board ran OreoOS, restore the backup before redeploying it: OreoOS's
+If the board ran FaleraOS, restore the backup before redeploying it: FaleraOS's
 `tools/deploy.py` uploads files through the MicroPython REPL and cannot
 recreate the firmware. The commands above use esptool v4 syntax (ESP-IDF 5.5);
 esptool v5 spells them `erase-flash`, `write-flash` and `read-flash`.

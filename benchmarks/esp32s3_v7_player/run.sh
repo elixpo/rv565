@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, flash and measure one clip on the Oreo Badge.
+# Build, flash and measure one clip on the Falera Badge.
 #   benchmarks/esp32s3_v7_player/run.sh CLIP.rv565 [OVERLAP=1] [PORT=/dev/ttyACM0] [PASSES=4]
 # Writes measurements/<clip>-<overlap|serial>.log next to this script and
 # prints the pass lines. Needs ESP-IDF 5.5 (IDF_PATH, or ~/esp/esp-idf-v5.5.1).

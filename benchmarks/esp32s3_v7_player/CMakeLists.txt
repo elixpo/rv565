@@ -1,4 +1,4 @@
-# RV565 version 7 playback benchmark for the Oreo Badge (ESP32-S3 N16R8,
+# RV565 version 7 playback benchmark for the Falera Badge (ESP32-S3 N16R8,
 # 320x240 ST7789). Builds the player around one clip, chosen at configure time:
 #   idf.py -DRV565_CLIP=/abs/path/clip.rv565 -DRV565_OVERLAP=1 build
 # RV565_OVERLAP=1 inflates on core 1 (dual-core, the default); 0 is serial.

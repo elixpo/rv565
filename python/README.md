@@ -15,7 +15,7 @@ pip install "rv565[pillow]"  # plus the Pillow plugin
 
 Published on PyPI: [pypi.org/project/rv565](https://pypi.org/project/rv565/).
 Prefer not to install anything? The
-[online converter](https://oreo.elixpo.com/rv565/convert/) does the same
+[online converter](https://falera.elixpo.com/rv565/convert/) does the same
 encoding in your browser.
 
 ## Command line

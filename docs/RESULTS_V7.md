@@ -18,7 +18,7 @@ bands for partial deltas, none for repeats. On the ESP32-S3 and RP2350 the
 transfer, not the decoder, bounds the frame time (31.3 and 33.4 ms of the
 41.7 ms budget at 24 FPS).
 
-Playback was then measured on the Oreo Badge (see
+Playback was then measured on the Falera Badge (see
 [On the badge](#on-the-badge-esp32-s3)).
 
 ## Results
@@ -90,7 +90,7 @@ What this shows:
 
 ## On the badge (ESP32-S3)
 
-Measured 2026-11-12 on the Oreo Badge: ESP32-S3 N16R8 at 240 MHz, 2.0"
+Measured 2026-11-12 on the Falera Badge: ESP32-S3 N16R8 at 240 MHz, 2.0"
 320x240 ST7789 on SPI at 40 MHz, ESP-IDF 5.5.1, with
 [`benchmarks/esp32s3_v7_player`](../benchmarks/esp32s3_v7_player) (the
 library's player and ESP32 port, ROM `tinfl`). Each clip is the 180x135,
