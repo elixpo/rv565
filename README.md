@@ -354,7 +354,7 @@ and we will list it here.
 ## The Falera family
 
 One project in three repositories, grouped under the
-[`oreo-badge`](https://github.com/orgs/elixpo/repositories?q=topic%3Aoreo-badge) topic:
+[`falera-badge`](https://github.com/orgs/elixpo/repositories?q=topic%3Afalera-badge) topic:
 
 - [elixpo/falera](https://github.com/elixpo/falera): the Falera Badge hardware, FaleraOS and the `falera` CLI
 - [elixpo/rv565](https://github.com/elixpo/rv565): RV565, the badge's video format (C library, encoder, Arduino, ESP-IDF and Pico SDK)
