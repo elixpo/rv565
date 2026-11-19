@@ -29,10 +29,14 @@ so a player sends the display only those pixels, one window per band. Version
   paper's two film windows are 2.1–5.5× smaller than in version 6, still
   pixel-exact, and a UI animation is lossless at 6% of MJPEG's size
   ([results](docs/RESULTS_V7.md)).
-- **Only changed rows go to the display**: partial deltas send just the bands
-  that changed. On the Falera Badge (ESP32-S3) that halved the mean frame time
-  of a UI animation, 31.4 → 14.8 ms, and cut film by 12%, with every frame on
-  time ([measurements](docs/RESULTS_V7.md#on-the-badge-esp32-s3)).
+- **Only changed pixels go to the display**: region deltas (version 8) send
+  each changed band's changed range as one window, 2.2–2.6× fewer pixels than
+  version 7's whole rows on UI content and low-motion film. That is as few
+  pixels as a perfect ZMBV player would send, in 4–11× fewer display windows,
+  with files within 6% of ZMBV's ([results](docs/RESULTS_V8.md)). Version 7's
+  partial deltas already halved the mean frame time of a UI animation on the
+  Falera Badge (ESP32-S3), 31.4 → 14.8 ms, with every frame on time
+  ([measurements](docs/RESULTS_V7.md#on-the-badge-esp32-s3)).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.

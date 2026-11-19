@@ -77,7 +77,7 @@ def zmbv(src, frames, width, height, tmp):
     for i in range(1, len(frames)):
         cur, prev = frames[i], frames[i - 1]
         key = i % FPS == 0
-        n = 0
+        n = area = 0
         for by in range(bh):
             for bx in range(bw):
                 x0, x1 = 2 * 16 * bx, 2 * min(width, 16 * (bx + 1))
@@ -85,7 +85,8 @@ def zmbv(src, frames, width, height, tmp):
                 if key or any(cur[y * stride + x0:y * stride + x1] !=
                               prev[y * stride + x0:y * stride + x1] for y in rows):
                     n += 1
-        sent.append(n * 256 / (width * height))
+                    area += (x1 - x0) // 2 * len(rows)   # edge blocks are clipped
+        sent.append(area / (width * height))
         windows.append(n)
     return out.stat().st_size, sent, windows
 
