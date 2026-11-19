@@ -205,7 +205,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("24 frames verified", self.run_cli("verify", str(VECTOR)))
         info = self.run_cli("info", str(V7 / "mono_vpage_zlib_k4.rv565"))
         self.assertIn("mono_vpage, 42 bytes per frame", info)
-        self.assertIn("3 key, 6 delta, 0 partial, 1 repeat", info)
+        self.assertIn("3 key, 6 delta, 0 partial, 0 region, 1 repeat", info)
+        self.assertIn("of pixels sent per frame", info)
         self.assertIn("keyframe interval 4", info)
 
     def test_testpattern_formats(self):
@@ -273,3 +274,138 @@ class PillowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RegionDeltaTests(unittest.TestCase):
+    """Version 8: region deltas (frame type 4)."""
+
+    W, H = 32, 16
+
+    def _clip(self, frames, fmt="rgb565be", **kw):
+        buf = io.BytesIO()
+        rv565.write(buf, self.W, self.H, 24, frames, pixel_format=fmt, keyframe_interval=8, **kw)
+        return buf.getvalue(), rv565.open(buf.getvalue())
+
+    def _frames(self, fmt="rgb565be"):
+        size = rv565.frame_size(fmt, self.W, self.H)
+        base = bytes(size)
+        lines, line_bytes = rv565.frame_lines(fmt, self.W, self.H)
+        second = bytearray(base)
+        # a small change in the middle of one line of the last band
+        mid = line_bytes // 2
+        second[(lines - 1) * line_bytes + mid] = 0xFF
+        return [base, bytes(second)]
+
+    def test_small_change_is_a_region_and_round_trips(self):
+        frames = self._frames()
+        data, clip = self._clip(frames)
+        self.assertEqual(data[3], 8)
+        self.assertEqual(clip.frame_type(1), "region")
+        self.assertEqual(list(clip), frames)
+        (first, count, x0, xw), = clip.changed_rects(1)
+        self.assertEqual((first, count), (8, 8))
+        self.assertLess(xw, 2 * self.W)
+        self.assertEqual(x0 % 2, 0)
+        self.assertEqual(xw % 2, 0)
+        self.assertEqual(clip.changed_lines(1), [(8, 8)])
+
+    def test_every_pixel_format_aligns_and_round_trips(self):
+        for fmt in rv565.PIXEL_FORMATS:
+            with self.subTest(fmt=fmt):
+                frames = self._frames(fmt)
+                _, clip = self._clip(frames, fmt=fmt)
+                self.assertEqual(list(clip), frames)
+                _, line_bytes = rv565.frame_lines(fmt, self.W, self.H)
+                align = rv565._ALIGN[fmt]
+                for _, _, x0, xw in clip.changed_rects(1):
+                    self.assertEqual(x0 % align, 0)
+                    self.assertTrue((x0 + xw) % align == 0 or x0 + xw == line_bytes)
+
+    def test_version_7_writes_no_regions(self):
+        frames = self._frames()
+        data, clip = self._clip(frames, version=7)
+        self.assertEqual(data[3], 7)
+        self.assertEqual(clip.frame_type(1), "partial")
+        self.assertEqual(list(clip), frames)
+
+    def test_full_width_change_stays_version_7(self):
+        size = rv565.frame_size("rgb565be", self.W, self.H)
+        frames = [bytes(size), bytes(size // 2) + bytes([3]) * (size // 2)]
+        data, clip = self._clip(frames)
+        self.assertEqual(data[3], 7)
+        self.assertEqual(clip.frame_type(1), "partial")
+
+    def test_scrolling_band_uses_a_shift(self):
+        lines, line_bytes = rv565.frame_lines("rgb565be", self.W, self.H)
+        a = bytearray(rv565.frame_size("rgb565be", self.W, self.H))
+        for y in range(8, 16):
+            for x in range(4, 20):
+                a[y * line_bytes + 2 * x] = (x * 7 + y) & 0xFF
+        b = bytearray(len(a))
+        for y in range(8, 16):
+            b[y * line_bytes + 2:(y + 1) * line_bytes] = a[y * line_bytes:(y + 1) * line_bytes - 2]
+        _, clip = self._clip([bytes(a), bytes(b)])
+        self.assertEqual(list(clip), [bytes(a), bytes(b)])
+        self.assertEqual(clip.frame_type(1), "region")
+
+    def _region_file(self, entries, data, version=8):
+        """A 32x16 rgb565be stored clip: a black keyframe, then one region
+        delta with the given (dx, dy, x0, xw) entries for band 1 (lines 8-15)."""
+        import struct
+        size = rv565.frame_size("rgb565be", self.W, self.H)
+        head = struct.pack("<3sBHHBBHBBBB", b"RV5", version, self.W, self.H, 24, 0, 2, 16, 0, 0, 8)
+        key = struct.pack("<IB", size + 1, 0) + bytes(size)
+        body = bytes((8, 0b10))
+        for dx, dy, x0, xw in entries:
+            body += struct.pack("<bbHH", dx, dy, x0, xw)
+        body += data
+        return head + key + struct.pack("<IB", len(body) + 1, 4) + body
+
+    def test_valid_hand_made_region(self):
+        data = self._region_file([(0, 0, 4, 6)], bytes([0xAB]) * (8 * 6))
+        clip = rv565.open(data)
+        f = clip.frame(1)
+        self.assertEqual(f[8 * 64 + 4:8 * 64 + 10], bytes([0xAB]) * 6)
+        self.assertEqual(f[8 * 64:8 * 64 + 4], bytes(4))
+        self.assertEqual(clip.changed_rects(1), [(8, 8, 4, 6)])
+
+    def test_invalid_regions_are_rejected(self):
+        cases = {
+            "misaligned start": [(0, 0, 3, 6)],
+            "misaligned end": [(0, 0, 4, 5)],
+            "zero width": [(0, 0, 4, 0)],
+            "past the line": [(0, 0, 60, 6)],
+            "shift too far": [(0, 8, 4, 6)],
+        }
+        for name, entries in cases.items():
+            with self.subTest(name):
+                xw = max(entries[0][3], 1)
+                with self.assertRaises(rv565.RV565Error):
+                    rv565.open(self._region_file(entries, bytes(8 * xw)))
+        with self.assertRaises(rv565.RV565Error):           # type 4 in a version 7 file
+            rv565.open(self._region_file([(0, 0, 4, 6)], bytes(48), version=7))
+        with self.assertRaises(rv565.RV565Error):           # wrong stored size
+            rv565.open(self._region_file([(0, 0, 4, 6)], bytes(47)))
+
+
+class CliOptionTests(unittest.TestCase):
+    def _args(self, **kw):
+        import argparse
+        base = dict(v6=False, v7=False, fps=24, format="rgb565be", codec="zlib",
+                    keyframe_interval=None, band_lines=8, tolerance=0, motion_range=8)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_default_lets_the_writer_choose_7_or_8(self):
+        from rv565 import cli
+        self.assertIsNone(cli.container_options(self._args())["version"])
+
+    def test_v7_writes_version_7(self):
+        from rv565 import cli
+        self.assertEqual(cli.container_options(self._args(v7=True))["version"], 7)
+        self.assertIn("version 7", cli.describe(self._args(v7=True, keyframe_interval=24)))
+
+    def test_v6_and_v7_together_is_an_error(self):
+        from rv565 import cli
+        with self.assertRaises(SystemExit):
+            cli.container_options(self._args(v6=True, v7=True, keyframe_interval=1))

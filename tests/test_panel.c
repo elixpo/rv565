@@ -108,6 +108,14 @@ int main(void)
         rv565_st7789_rows(p, 10, 5, rows);
         CHECK(word(rows) == p->y_offset + 10u && word(rows + 2) == p->y_offset + 14u,
               "%s: rows 10-14 window", presets[i].name);
+        /* Column windows for region updates, the same way. */
+        const rv565_st7789_step_t *caset = find(steps, n, RV565_ST7789_CASET);
+        uint8_t cols[4];
+        rv565_st7789_columns(p, 0, p->width, cols);
+        CHECK(caset != NULL && memcmp(cols, caset->data, 4) == 0, "%s: full column window", presets[i].name);
+        rv565_st7789_columns(p, 7, 3, cols);
+        CHECK(word(cols) == p->x_offset + 7u && word(cols + 2) == p->x_offset + 9u,
+              "%s: columns 7-9 window", presets[i].name);
     }
 
     const rv565_panel_t no_invert = { 240, 240, 0, 80, 0xC0, 0 };

@@ -35,7 +35,7 @@ const char *rv565_strerror(rv565_status_t status)
     case RV565_ERR_KEYFRAME:    return "missing keyframe at the keyframe interval";
     case RV565_ERR_RECORD:      return "repeat frame with a body, or stored frame of the wrong size";
     case RV565_ERR_UNSUPPORTED: return "pixel format not supported by this player";
-    case RV565_ERR_PARTIAL:     return "invalid partial delta band height or band mask";
+    case RV565_ERR_PARTIAL:     return "invalid partial or region delta band height, band mask, shift or range";
     }
     return "unknown error";
 }
@@ -54,7 +54,8 @@ rv565_status_t rv565_parse_header(const uint8_t *data, size_t size,
         return RV565_ERR_MAGIC;
     }
     const uint8_t version = data[3];
-    if (version != RV565_CONTAINER_V6 && version != RV565_CONTAINER_V7) {
+    if (version != RV565_CONTAINER_V6 && version != RV565_CONTAINER_V7 &&
+            version != RV565_CONTAINER_V8) {
         return RV565_ERR_VERSION;
     }
     out->width = rd16(data + 4);
@@ -84,7 +85,7 @@ rv565_status_t rv565_parse_header(const uint8_t *data, size_t size,
             out->fps == 0 || out->fps > max_fps || out->frames == 0) {
         return RV565_ERR_HEADER;
     }
-    if (version == RV565_CONTAINER_V7) {
+    if (version != RV565_CONTAINER_V6) {
         if (out->header_size < RV565_HEADER_SIZE_V7 || size < out->header_size) {
             return RV565_ERR_HEADER;
         }
@@ -145,18 +146,60 @@ void rv565_frame_lines(const rv565_header_t *h, uint16_t *lines, size_t *line_by
     }
 }
 
-/* A partial delta body, parsed. */
+uint8_t rv565_pixel_align(uint8_t pixel_format)
+{
+    switch (pixel_format) {
+    case RV565_PIXEL_RGB565BE:
+    case RV565_PIXEL_RGB565LE: return 2;
+    case RV565_PIXEL_RGB444:
+    case RV565_PIXEL_RGB666:
+    case RV565_PIXEL_RGB888:   return 3;
+    case RV565_PIXEL_GRAY8:
+    case RV565_PIXEL_GRAY4:
+    case RV565_PIXEL_MONO:
+    case RV565_PIXEL_MONO_VPAGE: return 1;
+    default:                   return 0;
+    }
+}
+
+rv565_status_t rv565_byte_columns(uint8_t pixel_format, uint16_t width,
+                                  uint32_t x0, uint32_t xw,
+                                  uint16_t *col0, uint16_t *cols)
+{
+    const uint32_t a = rv565_pixel_align(pixel_format);
+    if (a == 0 || col0 == NULL || cols == NULL || xw == 0) {
+        return RV565_ERR_ARG;
+    }
+    const uint32_t r = pixel_format == RV565_PIXEL_MONO_VPAGE
+        ? width : (uint32_t)rv565_row_bytes(pixel_format, width);
+    if (x0 >= r || xw > r - x0) {
+        return RV565_ERR_ARG;
+    }
+    const uint32_t p = pixel_format == RV565_PIXEL_MONO ? 8u
+        : (pixel_format == RV565_PIXEL_RGB444 || pixel_format == RV565_PIXEL_GRAY4) ? 2u : 1u;
+    const uint32_t first = x0 / a * p;
+    uint32_t end = (x0 + xw + a - 1u) / a * p;
+    if (end > width) {
+        end = width;
+    }
+    *col0 = (uint16_t)first;
+    *cols = (uint16_t)(end - first);
+    return RV565_OK;
+}
+
+/* A partial or region delta body, parsed. */
 typedef struct {
     uint16_t lines;        /* P */
     size_t line_bytes;     /* R */
     uint8_t band;          /* B */
+    uint8_t entry;         /* bytes per changed band: 2 (partial) or 6 (region) */
     uint32_t bands;        /* N = ceil(P / B) */
     uint32_t changed;      /* bands set in the mask */
     const uint8_t *mask;
-    const uint8_t *shifts; /* (dx, dy) signed bytes per changed band */
+    const uint8_t *entries; /* per changed band: dx, dy (signed bytes)[, x0, xw (u16)] */
     const uint8_t *data;   /* codec-encoded residuals of the changed bands */
     uint32_t data_len;
-    size_t size;           /* decoded size of the changed bands together */
+    size_t size;           /* decoded size of the residuals together */
 } partial_t;
 
 static int band_changed(const partial_t *p, uint32_t b)
@@ -171,11 +214,31 @@ static void band_lines(const partial_t *p, uint32_t b, uint32_t *first, uint32_t
     *end = *first + p->band < p->lines ? *first + p->band : p->lines;
 }
 
-static rv565_status_t partial_parse(uint16_t lines, size_t line_bytes, const uint8_t *body,
-                                    uint32_t length, partial_t *p)
+/* Shift and range of the k-th changed band; a partial delta's range is the
+ * whole line. */
+static void band_entry(const partial_t *p, uint32_t k, int *dx, int *dy,
+                       size_t *x0, size_t *xw)
+{
+    const uint8_t *e = p->entries + (size_t)p->entry * k;
+    *dx = (int8_t)e[0];
+    *dy = (int8_t)e[1];
+    if (p->entry == 6) {
+        *x0 = rd16(e + 2);
+        *xw = rd16(e + 4);
+    } else {
+        *x0 = 0;
+        *xw = p->line_bytes;
+    }
+}
+
+/* Parse a partial delta (align == 0) or a region delta whose ranges align to
+ * `align` bytes. */
+static rv565_status_t partial_parse(uint16_t lines, size_t line_bytes, unsigned align,
+                                    const uint8_t *body, uint32_t length, partial_t *p)
 {
     p->lines = lines;
     p->line_bytes = line_bytes;
+    p->entry = align != 0 ? 6 : 2;
     if (body == NULL || lines == 0 || line_bytes == 0) {
         return RV565_ERR_ARG;
     }
@@ -193,27 +256,36 @@ static rv565_status_t partial_parse(uint16_t lines, size_t line_bytes, const uin
         return RV565_ERR_PARTIAL;  /* a band past the frame */
     }
     p->changed = 0;
-    p->size = 0;
     for (uint32_t b = 0; b < p->bands; ++b) {
-        if (band_changed(p, b)) {
-            uint32_t first, end;
-            band_lines(p, b, &first, &end);
-            p->size += (size_t)(end - first) * p->line_bytes;
-            ++p->changed;
+        p->changed += (uint32_t)band_changed(p, b);
+    }
+    if (p->changed == 0 || (length - 1u - mask_len) / p->entry < p->changed) {
+        return RV565_ERR_PARTIAL;  /* no band, or too short for the entries */
+    }
+    p->entries = body + 1 + mask_len;
+    p->size = 0;
+    uint32_t k = 0;
+    for (uint32_t b = 0; b < p->bands; ++b) {
+        if (!band_changed(p, b)) {
+            continue;
         }
-    }
-    if (p->changed == 0 || length - 1u - mask_len < 2u * p->changed) {
-        return RV565_ERR_PARTIAL;  /* no band, or too short for the shifts */
-    }
-    p->shifts = body + 1 + mask_len;
-    for (uint32_t k = 0; k < p->changed; ++k) {
-        const int dy = (int8_t)p->shifts[2 * k + 1];
+        int dx, dy;
+        size_t x0, xw;
+        band_entry(p, k++, &dx, &dy, &x0, &xw);
         if (dy >= (int)p->band || -dy >= (int)p->band) {
             return RV565_ERR_PARTIAL;  /* the shift leaves the band */
         }
+        if (xw == 0 || x0 + xw > line_bytes ||
+                (align != 0 && (x0 % align != 0 ||
+                                ((x0 + xw) % align != 0 && x0 + xw != line_bytes)))) {
+            return RV565_ERR_PARTIAL;  /* empty, past the line, or not on whole pixels */
+        }
+        uint32_t first, end;
+        band_lines(p, b, &first, &end);
+        p->size += (size_t)(end - first) * xw;
     }
-    p->data = p->shifts + 2u * p->changed;
-    p->data_len = length - 1u - mask_len - 2u * p->changed;
+    p->data = p->entries + (size_t)p->entry * p->changed;
+    p->data_len = length - 1u - mask_len - (uint32_t)p->entry * p->changed;
     return RV565_OK;
 }
 
@@ -232,7 +304,7 @@ rv565_status_t rv565_open(rv565_clip_t *clip, const uint8_t *data, size_t size,
     if (index_entries < h.frames) {
         return RV565_ERR_ARG;
     }
-    const int v7 = h.version == RV565_CONTAINER_V7;
+    const int typed = h.version != RV565_CONTAINER_V6;  /* records with a type byte: versions 7 and 8 */
     const size_t frame_bytes = rv565_frame_bytes(&h);
     size_t cursor = h.header_size;
     for (uint32_t i = 0; i < h.frames; ++i) {
@@ -244,10 +316,11 @@ rv565_status_t rv565_open(rv565_clip_t *clip, const uint8_t *data, size_t size,
         if (length == 0 || size - cursor < length) {
             return RV565_ERR_TRUNCATED;
         }
-        if (v7) {
+        if (typed) {
             const uint8_t type = data[cursor];
-            if (type >= RV565_FRAME_TYPES) {
-                return RV565_ERR_FORMAT;
+            if (type >= RV565_FRAME_TYPES ||
+                    (type == RV565_FRAME_REGION && h.version < RV565_CONTAINER_V8)) {
+                return RV565_ERR_FORMAT;  /* reserved; region deltas need version 8 */
             }
             if (i % h.keyframe_interval == 0 && type != RV565_FRAME_KEY) {
                 return RV565_ERR_KEYFRAME;
@@ -256,12 +329,13 @@ rv565_status_t rv565_open(rv565_clip_t *clip, const uint8_t *data, size_t size,
                 if (length != 1) {
                     return RV565_ERR_RECORD;
                 }
-            } else if (type == RV565_FRAME_PARTIAL) {
+            } else if (type == RV565_FRAME_PARTIAL || type == RV565_FRAME_REGION) {
                 partial_t p;
                 uint16_t lines;
                 size_t line_bytes;
                 rv565_frame_lines(&h, &lines, &line_bytes);
-                status = partial_parse(lines, line_bytes, data + cursor + 1, length - 1u, &p);
+                const unsigned align = type == RV565_FRAME_REGION ? rv565_pixel_align(h.pixel_format) : 0u;
+                status = partial_parse(lines, line_bytes, align, data + cursor + 1, length - 1u, &p);
                 if (status != RV565_OK) {
                     return status;
                 }
@@ -312,48 +386,172 @@ int32_t rv565_keyframe_at_or_before(const rv565_clip_t *clip, uint16_t i)
     return i;
 }
 
-rv565_status_t rv565_partial_runs(const uint8_t *body, uint32_t length,
-                                  uint16_t lines, size_t line_bytes,
-                                  rv565_line_run_t *runs, size_t max_runs, size_t *count)
+/* Merge the changed bands of p into runs of adjacent lines and return how
+ * many there are; run k goes to runs[k], or to rects[k] at full width, while
+ * k < max. */
+static size_t merge_runs(const partial_t *p, rv565_line_run_t *runs, rv565_rect_t *rects,
+                         size_t max)
 {
-    if (count == NULL || (runs == NULL && max_runs != 0)) {
-        return RV565_ERR_ARG;
-    }
-    *count = 0;
-    partial_t p;
-    const rv565_status_t status = partial_parse(lines, line_bytes, body, length, &p);
-    if (status != RV565_OK) {
-        return status;
-    }
     size_t n = 0;
     uint32_t run_first = 0, run_end = 0;  /* current run; empty while equal */
-    for (uint32_t b = 0; b < p.bands; ++b) {
-        if (!band_changed(&p, b)) {
-            continue;
-        }
-        uint32_t first, end;
-        band_lines(&p, b, &first, &end);
-        if (run_end != run_first && run_end == first) {
-            run_end = end;
-            continue;
+    for (uint32_t b = 0; b <= p->bands; ++b) {
+        uint32_t first = 0, end = 0;     /* b == bands flushes the last run */
+        if (b < p->bands) {
+            if (!band_changed(p, b)) {
+                continue;
+            }
+            band_lines(p, b, &first, &end);
+            if (run_end != run_first && run_end == first) {
+                run_end = end;
+                continue;
+            }
         }
         if (run_end != run_first) {
-            if (n < max_runs) {
+            if (n < max && runs != NULL) {
                 runs[n].first = (uint16_t)run_first;
                 runs[n].count = (uint16_t)(run_end - run_first);
+            } else if (n < max) {
+                rects[n].first = (uint16_t)run_first;
+                rects[n].count = (uint16_t)(run_end - run_first);
+                rects[n].x0 = 0;
+                rects[n].xw = (uint32_t)p->line_bytes;
             }
             ++n;
         }
         run_first = first;
         run_end = end;
     }
-    if (n < max_runs) {
-        runs[n].first = (uint16_t)run_first;
-        runs[n].count = (uint16_t)(run_end - run_first);
+    return n;
+}
+
+/* Line runs of a partial (align 0) or region delta body. */
+static rv565_status_t band_runs(const uint8_t *body, uint32_t length,
+                                uint16_t lines, size_t line_bytes, unsigned align,
+                                rv565_line_run_t *runs, size_t max_runs, size_t *count)
+{
+    if (count == NULL || (runs == NULL && max_runs != 0)) {
+        return RV565_ERR_ARG;
     }
-    ++n;
+    *count = 0;
+    partial_t p;
+    const rv565_status_t status = partial_parse(lines, line_bytes, align, body, length, &p);
+    if (status != RV565_OK) {
+        return status;
+    }
+    *count = merge_runs(&p, runs, NULL, max_runs);
+    return *count <= max_runs ? RV565_OK : RV565_ERR_ARG;
+}
+
+rv565_status_t rv565_partial_runs(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes,
+                                  rv565_line_run_t *runs, size_t max_runs, size_t *count)
+{
+    return band_runs(body, length, lines, line_bytes, 0u, runs, max_runs, count);
+}
+
+/* Region deltas need a defined pixel format (its alignment). */
+static rv565_status_t region_align(uint8_t pixel_format, unsigned *align)
+{
+    *align = rv565_pixel_align(pixel_format);
+    return *align != 0 ? RV565_OK : RV565_ERR_ARG;
+}
+
+rv565_status_t rv565_region_runs(const uint8_t *body, uint32_t length,
+                                 uint16_t lines, size_t line_bytes, uint8_t pixel_format,
+                                 rv565_line_run_t *runs, size_t max_runs, size_t *count)
+{
+    unsigned align;
+    if (count != NULL) {
+        *count = 0;
+    }
+    if (region_align(pixel_format, &align) != RV565_OK) {
+        return RV565_ERR_ARG;
+    }
+    return band_runs(body, length, lines, line_bytes, align, runs, max_runs, count);
+}
+
+rv565_status_t rv565_region_rects(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes, uint8_t pixel_format,
+                                  rv565_rect_t *rects, size_t max_rects, size_t *count)
+{
+    unsigned align;
+    if (count == NULL || (rects == NULL && max_rects != 0) ||
+            region_align(pixel_format, &align) != RV565_OK) {
+        return RV565_ERR_ARG;
+    }
+    *count = 0;
+    partial_t p;
+    const rv565_status_t status = partial_parse(lines, line_bytes, align, body, length, &p);
+    if (status != RV565_OK) {
+        return status;
+    }
+    uint32_t k = 0;
+    for (uint32_t b = 0; b < p.bands; ++b) {
+        if (!band_changed(&p, b)) {
+            continue;
+        }
+        if (k < max_rects) {
+            uint32_t first, end;
+            int dx, dy;
+            size_t x0, xw;
+            band_lines(&p, b, &first, &end);
+            band_entry(&p, k, &dx, &dy, &x0, &xw);
+            rects[k].first = (uint16_t)first;
+            rects[k].count = (uint16_t)(end - first);
+            rects[k].x0 = (uint32_t)x0;
+            rects[k].xw = (uint32_t)xw;
+        }
+        ++k;
+    }
+    *count = k;
+    return k <= max_rects ? RV565_OK : RV565_ERR_ARG;
+}
+
+rv565_status_t rv565_changed_rects(const rv565_clip_t *clip, uint16_t i,
+                                   rv565_rect_t *rects, size_t max_rects,
+                                   size_t *count)
+{
+    if (count == NULL || (rects == NULL && max_rects != 0)) {
+        return RV565_ERR_ARG;
+    }
+    *count = 0;
+    const int type = rv565_frame_type(clip, i);
+    if (type < 0) {
+        return (rv565_status_t)type;
+    }
+    uint16_t lines;
+    size_t line_bytes;
+    rv565_frame_lines(&clip->header, &lines, &line_bytes);
+    if (type == RV565_FRAME_REGION) {
+        const uint8_t *body;
+        uint32_t length;
+        rv565_payload(clip, i, &body, &length);
+        return rv565_region_rects(body, length, lines, line_bytes, clip->header.pixel_format,
+                                  rects, max_rects, count);
+    }
+    size_t n = 0;
+    if (type == RV565_FRAME_PARTIAL) {
+        /* The line runs of rv565_changed_lines(), at full width. */
+        const uint8_t *body;
+        uint32_t length;
+        partial_t p;
+        rv565_payload(clip, i, &body, &length);
+        const rv565_status_t status = partial_parse(lines, line_bytes, 0u, body, length, &p);
+        if (status != RV565_OK) {
+            return status;
+        }
+        n = merge_runs(&p, NULL, rects, max_rects);
+    } else if (type != RV565_FRAME_REPEAT) {
+        if (max_rects > 0) {
+            rects[0].first = 0;
+            rects[0].count = lines;
+            rects[0].x0 = 0;
+            rects[0].xw = (uint32_t)line_bytes;
+        }
+        n = 1;
+    }
     *count = n;
-    return n <= max_runs ? RV565_OK : RV565_ERR_ARG;
+    return n <= max_rects ? RV565_OK : RV565_ERR_ARG;
 }
 
 rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
@@ -372,6 +570,16 @@ rv565_status_t rv565_changed_lines(const rv565_clip_t *clip, uint16_t i,
         return RV565_OK;
     }
     size_t n = 0;
+    if (type == RV565_FRAME_REGION) {
+        const uint8_t *body;
+        uint32_t length;
+        uint16_t lines;
+        size_t line_bytes;
+        rv565_payload(clip, i, &body, &length);
+        rv565_frame_lines(&clip->header, &lines, &line_bytes);
+        return rv565_region_runs(body, length, lines, line_bytes, clip->header.pixel_format,
+                                 runs, max_runs, count);
+    }
     if (type != RV565_FRAME_PARTIAL) {
         uint16_t lines;
         size_t line_bytes;
@@ -550,16 +758,66 @@ static void build_band(uint8_t *out, const uint8_t *src, const uint8_t *res,
     }
 }
 
-rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
-                                   uint16_t lines, size_t line_bytes, uint8_t codec,
-                                   const uint8_t *prev, uint8_t *dst,
-                                   uint8_t *scratch, size_t scratch_len)
+/* Build one changed band of a region delta: within bytes x0 .. x0 + xw - 1
+ * of each line, prediction (as in build_band, from the whole line) XOR
+ * residual; outside the range, the previous frame. `res` holds xw bytes per
+ * line. In place, only the range is written: lines are visited so that a
+ * prediction is read before its line changes, and a line predicting from
+ * itself (dy == 0) moves its bytes with memmove, so no copy is needed. With
+ * two buffers, `res` lies elsewhere or at or below `out` (zlib inflated into
+ * dst): lines go last to first, each residual line is moved into place
+ * before the rest of its line is written, and the residual lines not yet
+ * used all lie below the line being written. */
+static void build_region_band(uint8_t *out, const uint8_t *src, const uint8_t *res,
+                              uint32_t nlines, size_t r, size_t x0, size_t xw,
+                              int dx, int dy)
+{
+    const int in_place = out == src;
+    const int ascending = in_place && dy < 0;
+    /* Bytes j of the range whose prediction lies inside the line:
+     * x0 <= j < x0 + xw and 0 <= j - dx < r. */
+    const long lo_l = (long)x0 > (long)dx ? (long)x0 : (long)dx;
+    const long hi_l = (long)(x0 + xw) < (long)r + dx ? (long)(x0 + xw) : (long)r + dx;
+    const size_t lo = (size_t)lo_l, hi = hi_l > lo_l ? (size_t)hi_l : lo;
+    for (uint32_t k = 0; k < nlines; ++k) {
+        const uint32_t y = ascending ? k : nlines - 1u - k;
+        uint8_t *line = out + (size_t)y * r;
+        const uint8_t *residual = res + (size_t)y * xw;
+        const int32_t sy = (int32_t)y - dy;
+        const int predicted = sy >= 0 && sy < (int32_t)nlines && hi > lo;
+        const uint8_t *from = predicted ? src + (size_t)sy * r : src;
+        if (in_place) {
+            if (predicted) {
+                memmove(line + lo, from + lo - dx, hi - lo);
+                memset(line + x0, 0, lo - x0);
+                memset(line + hi, 0, x0 + xw - hi);
+            } else {
+                memset(line + x0, 0, xw);
+            }
+            xor_bytes(line + x0, line + x0, residual, xw);
+        } else {
+            const uint8_t *old = src + (size_t)y * r;
+            memmove(line + x0, residual, xw);
+            memcpy(line, old, x0);
+            memcpy(line + x0 + xw, old + x0 + xw, r - x0 - xw);
+            if (predicted) {
+                xor_bytes(line + lo, line + lo, from + lo - dx, hi - lo);
+            }
+        }
+    }
+}
+
+/* Apply a partial delta (align 0) or region delta body. */
+static rv565_status_t apply_bands(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes, unsigned align,
+                                  uint8_t codec, const uint8_t *prev, uint8_t *dst,
+                                  uint8_t *scratch, size_t scratch_len)
 {
     partial_t p;
     if (prev == NULL || dst == NULL || codec >= RV565_CODECS) {
         return RV565_ERR_ARG;
     }
-    rv565_status_t status = partial_parse(lines, line_bytes, body, length, &p);
+    rv565_status_t status = partial_parse(lines, line_bytes, align, body, length, &p);
     if (status != RV565_OK) {
         return status;
     }
@@ -586,7 +844,8 @@ rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
     } else if (zlib) {
         /* Two buffers: inflate the residuals to the start of dst; bands are
          * then built from the last back, and band b's residual sits at or
-         * below its own offset, so it is read before it is overwritten. */
+         * below its own offset (a range is at most a line), so it is read
+         * before it is overwritten. */
         status = rv565_inflate(p.data, p.data_len, dst, p.size);
         if (status != RV565_OK) {
             return status;
@@ -601,15 +860,42 @@ rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
         band_lines(&p, b, &first, &end);
         const size_t lo = (size_t)first * r, n = (size_t)(end - first) * r;
         if (band_changed(&p, b)) {
-            --k;
-            pos -= n;
-            build_band(dst + lo, prev + lo, res + pos, end - first, r,
-                       (int8_t)p.shifts[2 * k], (int8_t)p.shifts[2 * k + 1]);
+            int dx, dy;
+            size_t x0, xw;
+            band_entry(&p, --k, &dx, &dy, &x0, &xw);
+            pos -= (size_t)(end - first) * xw;
+            if (align != 0) {
+                build_region_band(dst + lo, prev + lo, res + pos, end - first, r, x0, xw, dx, dy);
+            } else {
+                build_band(dst + lo, prev + lo, res + pos, end - first, r, dx, dy);
+            }
         } else if (prev != dst) {
             memcpy(dst + lo, prev + lo, n);
         }
     }
     return RV565_OK;
+}
+
+rv565_status_t rv565_apply_partial(const uint8_t *body, uint32_t length,
+                                   uint16_t lines, size_t line_bytes, uint8_t codec,
+                                   const uint8_t *prev, uint8_t *dst,
+                                   uint8_t *scratch, size_t scratch_len)
+{
+    return apply_bands(body, length, lines, line_bytes, 0u, codec, prev, dst,
+                       scratch, scratch_len);
+}
+
+rv565_status_t rv565_apply_region(const uint8_t *body, uint32_t length,
+                                  uint16_t lines, size_t line_bytes, uint8_t pixel_format,
+                                  uint8_t codec, const uint8_t *prev, uint8_t *dst,
+                                  uint8_t *scratch, size_t scratch_len)
+{
+    unsigned align;
+    if (region_align(pixel_format, &align) != RV565_OK) {
+        return RV565_ERR_ARG;
+    }
+    return apply_bands(body, length, lines, line_bytes, align, codec, prev, dst,
+                       scratch, scratch_len);
 }
 
 rv565_status_t rv565_decode(const rv565_clip_t *clip, uint16_t i,
@@ -644,6 +930,13 @@ rv565_status_t rv565_decode(const rv565_clip_t *clip, uint16_t i,
         rv565_frame_lines(&clip->header, &lines, &line_bytes);
         return rv565_apply_partial(body, length, lines, line_bytes, clip->header.codec,
                                    prev, dst, scratch, scratch_len);
+    }
+    if (type == RV565_FRAME_REGION) {
+        uint16_t lines;
+        size_t line_bytes;
+        rv565_frame_lines(&clip->header, &lines, &line_bytes);
+        return rv565_apply_region(body, length, lines, line_bytes, clip->header.pixel_format,
+                                  clip->header.codec, prev, dst, scratch, scratch_len);
     }
     /* Delta. */
     if (clip->header.codec == RV565_CODEC_STORED) {

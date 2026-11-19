@@ -38,6 +38,7 @@ __version__ = "2.0.1"
 MAGIC = b"RV5"
 VERSION = 7
 VERSION_6 = 6
+VERSION_8 = 8  # version 7 plus region deltas (frame type 4)
 MAX_FPS = 60
 MAX_FPS_V6 = 30
 MAX_FRAMES = 0xFFFF
@@ -49,8 +50,8 @@ LENGTH = struct.Struct("<I")
 PIXEL_FORMATS = ("rgb565be", "rgb565le", "rgb444", "rgb666", "rgb888",
                  "gray8", "gray4", "mono", "mono_vpage")
 CODECS = ("stored", "zlib")
-KEYFRAME, DELTA, REPEAT, PARTIAL = 0, 1, 2, 3
-FRAME_TYPES = ("key", "delta", "repeat", "partial")
+KEYFRAME, DELTA, REPEAT, PARTIAL, REGION = 0, 1, 2, 3, 4
+FRAME_TYPES = ("key", "delta", "repeat", "partial", "region")
 BAND_LINES = 8  # default band height of the reference encoder
 MOTION_RANGE = 8  # default shift search range of the reference encoder, in pixels
 
@@ -134,6 +135,48 @@ def _partial_layout(body, lines, line_bytes):
     return band, changed, shifts, start, size
 
 
+# Byte ranges of region deltas start and end on whole pixels: a range is a
+# multiple of this many bytes, or runs to the end of the line.
+_ALIGN = {"rgb565be": 2, "rgb565le": 2, "rgb444": 3, "rgb666": 3, "rgb888": 3,
+          "gray8": 1, "gray4": 1, "mono": 1, "mono_vpage": 1}
+
+
+def _region_layout(body, lines, line_bytes, align):
+    """Parse a region delta body: (band height, changed bands, shifts,
+    ranges, data offset, decoded data size). Raises RV565Error if the header
+    part is invalid."""
+    if len(body) < 1 or body[0] == 0:
+        raise RV565Error("region delta with band height 0")
+    band = body[0]
+    count = (lines + band - 1) // band
+    mask_len = (count + 7) // 8
+    if len(body) < 1 + mask_len:
+        raise RV565Error("region delta too short for its band mask")
+    mask = body[1:1 + mask_len]
+    changed = [b for b in range(count) if mask[b >> 3] >> (b & 7) & 1]
+    if not changed:
+        raise RV565Error("region delta with no changed band")
+    if any(mask[b >> 3] >> (b & 7) & 1 for b in range(count, 8 * mask_len)):
+        raise RV565Error("region delta sets a band past the frame")
+    start = 1 + mask_len + 6 * len(changed)
+    if len(body) < start:
+        raise RV565Error("region delta too short for its band entries")
+    shifts, ranges, size = [], [], 0
+    for k, b in enumerate(changed):
+        o = 1 + mask_len + 6 * k
+        dx, dy = (v - 256 if v > 127 else v for v in body[o:o + 2])
+        x0, xw = struct.unpack_from("<HH", body, o + 2)
+        if abs(dy) >= band:
+            raise RV565Error("region delta shifts a band by %d lines, more than it has" % dy)
+        if xw == 0 or x0 + xw > line_bytes or x0 % align or \
+                ((x0 + xw) % align and x0 + xw != line_bytes):
+            raise RV565Error("region delta band %d has an invalid range %d+%d" % (b, x0, xw))
+        shifts.append((dx, dy))
+        ranges.append((x0, xw))
+        size += (min(lines, (b + 1) * band) - b * band) * xw
+    return band, changed, shifts, ranges, start, size
+
+
 def _predict(prev, first, end, line_bytes, dx, dy):
     """Prediction of lines first..end-1 from prev, shifted by (dx bytes, dy
     lines), never reaching outside the band; zero where it would."""
@@ -177,7 +220,7 @@ class Header:
 
 
 def parse_header(data):
-    """Parse and range-check a version 6 or 7 header."""
+    """Parse and range-check a version 6, 7 or 8 header."""
     if len(data) < HEADER_V6.size:
         raise RV565Error("file too short")
     magic, version, width, height, fps, flags, frames = HEADER_V6.unpack_from(data)
@@ -187,7 +230,7 @@ def parse_header(data):
         if not (width and height and 1 <= fps <= MAX_FPS_V6 and frames):
             raise RV565Error("invalid header")
         return Header(width, height, fps, flags, frames, VERSION_6, HEADER_V6.size)
-    if version != VERSION:
+    if version not in (VERSION, VERSION_8):
         raise RV565Error("unsupported RV565 version %d" % version)
     if len(data) < HEADER.size:
         raise RV565Error("file too short")
@@ -203,7 +246,7 @@ def parse_header(data):
         raise RV565Error("unsupported codec %d" % codec)
     if interval == 0:
         raise RV565Error("invalid keyframe interval 0")
-    return Header(width, height, fps, flags, frames, VERSION, header_size,
+    return Header(width, height, fps, flags, frames, version, header_size,
                   PIXEL_FORMATS[fmt], CODECS[codec], interval)
 
 
@@ -235,7 +278,7 @@ class Clip:
                 kind, body = KEYFRAME, offset
             else:
                 kind, body = self.data[offset], offset + 1
-                if kind >= len(FRAME_TYPES):
+                if kind >= len(FRAME_TYPES) or (kind == REGION and h.version < VERSION_8):
                     raise RV565Error("unsupported frame type %d at frame %d" % (kind, i))
                 if i % h.keyframe_interval == 0 and kind != KEYFRAME:
                     raise RV565Error("frame %d must be a keyframe" % i)
@@ -250,6 +293,14 @@ class Clip:
                         self.data[offset + 1:offset + length], lines, line_bytes)
                     if h.codec == "stored" and length - 1 - start != want:
                         raise RV565Error("stored partial frame %d has %d bytes, expected %d"
+                                         % (i, length - 1 - start, want))
+                if kind == REGION:
+                    lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+                    _, _, _, _, start, want = _region_layout(
+                        self.data[offset + 1:offset + length], lines, line_bytes,
+                        _ALIGN[h.pixel_format])
+                    if h.codec == "stored" and length - 1 - start != want:
+                        raise RV565Error("stored region frame %d has %d bytes, expected %d"
                                          % (i, length - 1 - start, want))
             offsets.append((kind, body, offset + length - body))
             offset += length
@@ -267,7 +318,7 @@ class Clip:
         return self.header.frames
 
     def frame_type(self, i):
-        """'key', 'delta' or 'repeat'."""
+        """'key', 'delta', 'repeat', 'partial' or 'region'."""
         return FRAME_TYPES[self._index[self._check(i)][0]]
 
     def payload_sizes(self):
@@ -300,9 +351,13 @@ class Clip:
         kind = self._index[self._check(i)][0]
         if kind == REPEAT:
             return []
-        if kind != PARTIAL:
+        if kind not in (PARTIAL, REGION):
             return [(0, lines)]
-        band, changed, _, _, _ = _partial_layout(self.payload(i), lines, line_bytes)
+        if kind == REGION:
+            band, changed = _region_layout(self.payload(i), lines, line_bytes,
+                                           _ALIGN[h.pixel_format])[:2]
+        else:
+            band, changed, _, _, _ = _partial_layout(self.payload(i), lines, line_bytes)
         runs = []
         for b in changed:
             first, end = b * band, min(lines, (b + 1) * band)
@@ -311,6 +366,24 @@ class Clip:
             else:
                 runs.append((first, end - first))
         return runs
+
+    def changed_rects(self, i):
+        """Rectangles (first line, line count, first byte, byte count) that
+        frame i changes, one per changed band for a partial or region delta,
+        the whole frame for a keyframe or delta, none for a repeat. A player
+        sends each to the display as one window; byte ranges start and end
+        on whole pixels."""
+        h = self.header
+        lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+        kind = self._index[self._check(i)][0]
+        if kind == REPEAT:
+            return []
+        if kind == REGION:
+            band, changed, _, ranges, _, _ = _region_layout(
+                self.payload(i), lines, line_bytes, _ALIGN[h.pixel_format])
+            return [(b * band, min(lines, (b + 1) * band) - b * band, x0, xw)
+                    for b, (x0, xw) in zip(changed, ranges)]
+        return [(first, count, 0, line_bytes) for first, count in self.changed_lines(i)]
 
     def _body(self, i):
         body, size = self.payload(i), self.header.frame_bytes
@@ -343,6 +416,23 @@ class Clip:
                 out[lo:hi] = _xor(_predict(prev, first, end, line_bytes, dx, dy),
                                   data[pos:pos + hi - lo])
                 pos += hi - lo
+            return bytes(out)
+        if kind == REGION:
+            h = self.header
+            lines, line_bytes = frame_lines(h.pixel_format, h.width, h.height)
+            body = self.payload(i)
+            band, changed, shifts, ranges, start, size = _region_layout(
+                body, lines, line_bytes, _ALIGN[h.pixel_format])
+            data = self._decode_data(i, body[start:], size)
+            out, pos = bytearray(prev), 0
+            for b, (dx, dy), (x0, xw) in zip(changed, shifts, ranges):
+                first, end = b * band, min(lines, (b + 1) * band)
+                pred = _predict(prev, first, end, line_bytes, dx, dy)
+                for y in range(first, end):
+                    o = (y - first) * line_bytes + x0
+                    res = data[pos:pos + xw]
+                    out[y * line_bytes + x0:y * line_bytes + x0 + xw] = _xor(pred[o:o + xw], res)
+                    pos += xw
             return bytes(out)
         return _xor(prev, self._body(i))
 
@@ -500,6 +590,86 @@ def _partial_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb56
     return bytes((band,)) + bytes(mask) + bytes(shifts) + _encode(b"".join(parts), codec, level)
 
 
+def _changed_range(cur, old, rows, line_bytes, align):
+    """(x0, xw): the bytes of a band's lines that differ, widened to whole
+    pixels, or None if none do."""
+    lo, hi = line_bytes, -1
+    for r in range(rows):
+        a = cur[r * line_bytes:(r + 1) * line_bytes]
+        b = old[r * line_bytes:(r + 1) * line_bytes]
+        if a == b:
+            continue
+        i = 0
+        while a[i] == b[i]:
+            i += 1
+        j = line_bytes - 1
+        while a[j] == b[j]:
+            j -= 1
+        lo, hi = min(lo, i), max(hi, j)
+    if hi < 0:
+        return None
+    x0 = lo - lo % align
+    x1 = min(line_bytes, hi + 1 + (-(hi + 1)) % align)
+    return x0, x1 - x0
+
+
+def _crop(data, rows, line_bytes, x0, xw):
+    return b"".join(data[r * line_bytes + x0:r * line_bytes + x0 + xw] for r in range(rows))
+
+
+def _region_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565be",
+                 motion_range=0):
+    """Body of a region delta (None if no band changed or the band height
+    does not fit in a byte): like a partial delta, but each changed band
+    stores only the range of bytes along its lines that changed. With a
+    motion range, each band gets the first shift (in the documented search
+    order) with the fewest nonzero residual bytes inside its range."""
+    if not 1 <= band <= 255:
+        return None
+    align = _ALIGN[fmt]
+    count = (lines + band - 1) // band
+    mask = bytearray((count + 7) // 8)
+    entries, parts, narrower = bytearray(), [], False
+    step, max_dx = _shift_steps(fmt, motion_range) if motion_range else (1, 0)
+    max_dy = min(band - 1, 127) if motion_range else 0
+    max_dx = min(max_dx, 127 - 127 % step)
+    for b in range(count):
+        first, end = b * band, min(lines, (b + 1) * band)
+        lo, hi = first * line_bytes, end * line_bytes
+        cur, old = frame[lo:hi], prev[lo:hi]
+        if cur == old:
+            continue
+        rows = end - first
+        x0, xw = _changed_range(cur, old, rows, line_bytes, align)
+        mask[b >> 3] |= 1 << (b & 7)
+        cur_c = _crop(cur, rows, line_bytes, x0, xw)
+        best = _xor(cur_c, _crop(old, rows, line_bytes, x0, xw))
+        best_cost, best_shift = _nonzero(best), (0, 0)
+        if best_cost and (max_dx or max_dy):
+            for dy in _alternating(min(max_dy, rows - 1)):
+                for dx in _alternating(max_dx, step):
+                    if dx == 0 and dy == 0:
+                        continue
+                    pred = _predict(prev, first, end, line_bytes, dx, dy)
+                    res = _xor(cur_c, _crop(pred, rows, line_bytes, x0, xw))
+                    cost = _nonzero(res)
+                    if cost < best_cost:
+                        best, best_cost, best_shift = res, cost, (dx, dy)
+                        if cost == 0:
+                            break
+                if best_cost == 0:
+                    break
+        entries += bytes((best_shift[0] & 0xFF, best_shift[1] & 0xFF))
+        entries += struct.pack("<HH", x0, xw)
+        parts.append(best)
+        narrower = narrower or xw < line_bytes
+    # Every band changed across its whole width: a partial delta says the
+    # same in fewer bytes, and keeps the file readable by version 7 players.
+    if not parts or not narrower:
+        return None
+    return bytes((band,)) + bytes(mask) + bytes(entries) + _encode(b"".join(parts), codec, level)
+
+
 def _apply_tolerance(frame, prev, width, height, fmt, tolerance):
     """Keep each pixel of prev where every channel of frame, in 8 bits, is
     within tolerance of it. Returns the frame the decoder will show."""
@@ -526,7 +696,7 @@ def _apply_tolerance(frame, prev, width, height, fmt, tolerance):
 
 def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec="zlib",
                   keyframe_interval=1, band_lines=BAND_LINES, tolerance=0,
-                  motion_range=MOTION_RANGE):
+                  motion_range=MOTION_RANGE, regions=True):
     """Yield (frame type, body) for each frame, already in ``pixel_format``.
 
     Frames at multiples of ``keyframe_interval`` are keyframes; any other frame
@@ -536,7 +706,9 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
     measured). ``tolerance`` (0-255, default 0: lossless) keeps a pixel of
     the previous decoded frame where every channel is within it, in 8 bits.
     ``motion_range`` (pixels, 0 turns it off) bounds the per-band shift search
-    of partial deltas.
+    of partial deltas. ``regions`` (version 8) lets a changed band store only
+    the range of each line that changed (region deltas); a file that uses
+    them must be written as version 8.
     """
     size = frame_size(pixel_format, width, height)
     fmt = PIXEL_FORMATS[_format_index(pixel_format)]
@@ -566,26 +738,37 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
                                         fmt, motion_range)
                 if partial is not None:
                     options.append((PARTIAL, partial))
-            # The smallest body, except that a partial delta wins whenever it
-            # is at most 2% (and at least 16 bytes) larger: it saves the
-            # display transfer of every unchanged band, which on these boards
-            # costs more than a few bytes of inflate.
+                if regions:
+                    region = _region_body(frame, prev, lines, line_bytes, band_lines, codec,
+                                          level, fmt, motion_range)
+                    if region is not None:
+                        options.append((REGION, region))
+            # The smallest body, except that a region delta, then a partial
+            # delta, wins whenever it is at most 2% (and at least 16 bytes)
+            # larger: they save the display transfer of everything unchanged,
+            # which on these boards costs more than a few bytes of inflate.
             best = min(options, key=lambda o: (len(o[1]), o[0] != DELTA))
-            partial = [o for o in options if o[0] == PARTIAL]
-            if partial and len(partial[0][1]) <= len(best[1]) + max(16, len(best[1]) // 50):
-                best = partial[0]
+            for kind in (REGION, PARTIAL):
+                pick = [o for o in options if o[0] == kind]
+                if pick and len(pick[0][1]) <= len(best[1]) + max(16, len(best[1]) // 50):
+                    best = pick[0]
+                    break
             yield best
         prev = frame
 
 
 def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be",
-          codec="zlib", keyframe_interval=1, version=VERSION, band_lines=BAND_LINES,
+          codec="zlib", keyframe_interval=1, version=None, band_lines=BAND_LINES,
           tolerance=0, motion_range=MOTION_RANGE):
     """Write frames (an iterable of bytes in ``pixel_format``) as an RV565 file.
 
-    ``target`` is a path or a seekable binary file object. ``version=6``
-    writes a version 6 file for players older than RV565 2.0; it allows only
-    rgb565be, zlib and keyframe_interval 1 (and so no partial deltas).
+    ``target`` is a path or a seekable binary file object. By default the
+    file is version 8 if it uses region deltas and version 7 otherwise, so
+    players older than RV565 3.0 read every file that doesn't need them.
+    ``version=7`` never writes region deltas (for RV565 2.x players);
+    ``version=6`` writes a version 6 file for players older than RV565 2.0;
+    it allows only rgb565be, zlib and keyframe_interval 1 (and so no partial
+    deltas).
     ``band_lines``, ``tolerance`` and ``motion_range`` are passed to
     encode_frames. Returns the
     number of frames.
@@ -598,11 +781,11 @@ def write(target, width, height, fps, frames, level=1, *, pixel_format="rgb565be
             raise RV565Error("version 6 supports only rgb565be, zlib, keyframe_interval 1")
         if not 1 <= fps <= MAX_FPS_V6:
             raise RV565Error("fps must be 1-%d" % MAX_FPS_V6)
-    elif version == VERSION:
+    elif version in (None, VERSION, VERSION_8):
         if not 1 <= fps <= MAX_FPS:
             raise RV565Error("fps must be 1-%d" % MAX_FPS)
     else:
-        raise RV565Error("can write version 6 or 7, not %r" % (version,))
+        raise RV565Error("can write version 6, 7 or 8, not %r" % (version,))
     if hasattr(target, "write"):
         return _write(target, width, height, fps, frames, level, fmt, cod,
                       keyframe_interval, version, band_lines, tolerance, motion_range)
@@ -617,11 +800,13 @@ def _write(out, width, height, fps, frames, level, fmt, codec, interval, version
     if version == VERSION_6:
         out.write(HEADER_V6.pack(MAGIC, version, width, height, fps, 0, 0))
     else:
-        out.write(HEADER.pack(MAGIC, version, width, height, fps, 0, 0,
+        out.write(HEADER.pack(MAGIC, version or VERSION, width, height, fps, 0, 0,
                               HEADER.size, fmt, codec, interval))
-    count = 0
+    count, used_regions = 0, False
     for kind, body in encode_frames(frames, width, height, level, fmt, codec, interval,
-                                    band_lines, tolerance, motion_range):
+                                    band_lines, tolerance, motion_range,
+                                    regions=version in (None, VERSION_8)):
+        used_regions = used_regions or kind == REGION
         count += 1
         if count > MAX_FRAMES:
             raise RV565Error("more than %d frames" % MAX_FRAMES)
@@ -634,6 +819,9 @@ def _write(out, width, height, fps, frames, level, fmt, codec, interval, version
     if count == 0:
         raise RV565Error("no frames")
     end = out.tell()
+    if version is None and used_regions:
+        out.seek(start + 3)
+        out.write(bytes((VERSION_8,)))
     out.seek(start + 10)
     out.write(struct.pack("<H", count))
     out.seek(end)

@@ -2,26 +2,27 @@
 
 Fields for the PRONOM new-format form at The National Archives
 (https://www.nationalarchives.gov.uk/PRONOM/), with sample files to attach.
-Versions 6 and 7 are separate format records with separate signatures, as
-PRONOM does for other versioned formats; version 7 was added after the
-version 6 submission (PRONOM_Research#202) and can be sent as an update to it.
+Versions 6, 7 and 8 are separate format records with separate signatures,
+as PRONOM does for other versioned formats; versions 7 and 8 were added after
+the version 6 submission (PRONOM_Research#202) and can be sent as updates to
+it.
 
 | Field | Value |
 | --- | --- |
 | Format name | RV565 Video |
-| Version | 6; 7 |
+| Version | 6; 7; 8 |
 | Other names | RV565 container |
 | File extension | `rv565` |
 | MIME type | `video/x-rv565` |
 | Format type / classification | Video |
 | Byte order | Little-endian |
 | Developer | Ayushman Bhattacharya and Anwesha Chakraborty (Elixpo) |
-| Release date | Version 6: 2026-10-31 (library 1.0.0). Version 7: library 2.0.0 |
+| Release date | Version 6: 2026-10-31 (library 1.0.0). Version 7: library 2.0.0. Version 8: library 3.0.0 |
 | Licence | Specification and reference code MIT |
 | Specification | https://github.com/elixpo/rv565/blob/main/docs/FORMAT.md |
 | Further reading | Bhattacharya, A. and Chakraborty, A. (2026). *RV565: Cross-Layer Co-Design for Frame-Independent Video Playback on MicroPython-Class ESP32-S3 Systems.* arXiv:2610.35935. https://arxiv.org/abs/2610.35935 |
-| Related formats | Contains zlib (RFC 1950) compressed streams (version 6; optional in version 7) |
-| Sample files | Version 6: `tests/data/testpattern.rv565` (6,322 bytes, SHA-256 `5908de84764962132f31543df0ca2276d10d7744fa2c292caf5fde3f66faa8a7`). Version 7: any valid file in `tests/data/v7/`, e.g. `rgb565be_zlib_k4.rv565` (listed with per-frame hashes in `tests/data/v7/manifest.json`) |
+| Related formats | Contains zlib (RFC 1950) compressed streams (version 6; optional in versions 7 and 8) |
+| Sample files | Version 6: `tests/data/testpattern.rv565` (6,322 bytes, SHA-256 `5908de84764962132f31543df0ca2276d10d7744fa2c292caf5fde3f66faa8a7`). Version 7: any valid file in `tests/data/v7/`, e.g. `rgb565be_zlib_k4.rv565` (listed with per-frame hashes in `tests/data/v7/manifest.json`). Version 8: any valid file in `tests/data/v8/`, e.g. `rgb565be_zlib_region_k5.rv565` (`tests/data/v8/manifest.json`) |
 
 ## Description
 
@@ -82,7 +83,15 @@ Both anchored at the beginning of file (BOF), offset 0.
 The header size may be larger in later minor revisions; the signature
 requires 16 so that the first frame type is at a fixed offset.
 
-Flags are not part of either signature because readers must ignore unknown
+### Version 8
+
+    52563508{4}[01:3C]{3}10[00:08][00:01][01:FF]{4}00
+
+The same fields as version 7, with container version `08`. Version 8 has the
+version 7 header and adds one frame type (region deltas), so writers use it
+only for files that contain one; a file that doesn't is written as version 7.
+
+Flags are not part of any signature because readers must ignore unknown
 bits.
 
 ## Contact

@@ -22,6 +22,7 @@ class Bitmap:
         self.values = [0] * (width * height)
         self.writes = 0
         self.dirty_rows = set()  # rows written since the test last cleared it
+        self.dirty = set()  # (x, y) written since the test last cleared it
 
     def __setitem__(self, index, value):
         if isinstance(index, tuple):
@@ -32,6 +33,7 @@ class Bitmap:
         self.values[index] = value
         self.writes += 1
         self.dirty_rows.add(index // self.width)
+        self.dirty.add((index % self.width, index // self.width))
 
     def __getitem__(self, index):
         if isinstance(index, tuple):

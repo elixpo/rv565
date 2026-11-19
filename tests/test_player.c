@@ -1,13 +1,17 @@
 /* Host test for the player: a mock display assembles stripes into a panel
- * framebuffer (honouring row windows), and a synchronous mock decoder stands
- * in for core 1. On every path (serial with one or two buffers, dual-core,
- * with and without a row window) the panel must show every presented frame
- * exactly, through skips and loops; repeats must not be sent, and a partial
- * delta must send exactly the panel rows scaled from its changed lines.
+ * framebuffer (honouring row and column windows), and a synchronous mock
+ * decoder stands in for core 1. On every path (serial with one or two
+ * buffers, dual-core; full writes, row windows, row and column windows, and
+ * column windows only) the panel must show every presented frame exactly,
+ * through skips and loops; repeats must not be sent, a partial delta must
+ * send exactly the panel rows scaled from its changed lines, and a region
+ * delta with column windows exactly the panel pixels scaled from its bands'
+ * ranges, each in a window of its own (bands with the same columns that
+ * touch may share one).
  *
- * Besides the files given, it builds stored rgb565be clips in memory with
- * partial deltas of several band heights and scattered bands, for an
- * upscaled and a downscaled panel.
+ * Besides the files given, it builds rgb565be clips in memory with partial
+ * deltas and region deltas of several band heights, scattered bands, ranges
+ * and shifts, for an upscaled and a downscaled panel.
  *
  * Usage: test_player file.rv565 [more.rv565 ...] */
 #include <stdio.h>
@@ -21,8 +25,9 @@
 #define ROWS 24
 
 static uint8_t screen[PW * PH * 2];
-static size_t cursor, window_end;
-static int queued, failures, writes;
+static size_t cursor, window_end;           /* bytes written into, and size of, the window */
+static unsigned win_x, win_y, win_w, win_h; /* the window, in panel pixels */
+static int queued, failures, writes, column_windows;
 static uint32_t clock_us;
 static const rv565_clip_t *g_clip;
 static struct { uint16_t index; const uint8_t *prev; uint8_t *dst; size_t len; int pending; } job;
@@ -30,22 +35,42 @@ static struct { uint16_t index; const uint8_t *prev; uint8_t *dst; size_t len; i
 #define FAIL(...) do { fprintf(stderr, "FAIL: " __VA_ARGS__); fputc('\n', stderr); ++failures; } while (0)
 
 static uint32_t fake_micros(void) { return clock_us += 7; }
-static void begin(void *c) { (void)c; cursor = 0; window_end = sizeof(screen); ++writes; }
+static void set_window(unsigned x, unsigned y, unsigned w, unsigned h)
+{
+    win_x = x; win_y = y; win_w = w; win_h = h;
+    cursor = 0;
+    window_end = (size_t)w * h * 2;
+    ++writes;
+}
+static void begin(void *c) { (void)c; set_window(0, 0, PW, PH); }
 static void begin_rows(void *c, uint16_t first, uint16_t rows)
 {
     (void)c;
     if (rows == 0 || first + rows > PH) FAIL("bad row window %u+%u", first, rows);
-    cursor = (size_t)first * PW * 2;
-    window_end = cursor + (size_t)rows * PW * 2;
-    ++writes;
+    set_window(0, first, PW, rows);
+}
+static void begin_window(void *c, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    (void)c;
+    if (w == 0 || h == 0 || x + w > PW || y + h > PH) FAIL("bad window %u+%u x %u+%u", x, w, y, h);
+    set_window(x, y, w, h);
+    ++column_windows;
 }
 static void queue(void *c, const uint8_t *d, size_t n)
 {
     (void)c;
     if (++queued > 2) FAIL("more than two stripes queued");
     if (cursor + n > window_end) { FAIL("stripe overruns the window"); return; }
-    memcpy(screen + cursor, d, n);
-    cursor += n;
+    if (n > (size_t)PW * ROWS * 2) FAIL("stripe larger than its buffer");
+    const size_t row = (size_t)win_w * 2;
+    while (n != 0) {  /* raster order inside the window */
+        const size_t y = cursor / row, x = cursor % row;
+        const size_t chunk = n < row - x ? n : row - x;
+        memcpy(screen + ((win_y + y) * PW + win_x) * 2 + x, d, chunk);
+        d += chunk;
+        n -= chunk;
+        cursor += chunk;
+    }
 }
 static void wait_one(void *c) { (void)c; --queued; }
 static void end(void *c)
@@ -101,6 +126,11 @@ static int check_frame(const rv565_clip_t *clip, uint16_t index, const char *mod
     return 0;
 }
 
+/* Display modes. */
+enum { FULL, ROWS_ONLY, ROWS_AND_COLUMNS, COLUMNS_ONLY, MODES };
+static const char *const MODE_NAMES[MODES] = {
+    "full writes", "row windows", "row and column windows", "column windows only" };
+
 /* Panel rows a sequential present of frame i must send. */
 static unsigned rows_expected(const rv565_clip_t *clip, uint16_t i, int windows)
 {
@@ -118,7 +148,39 @@ static unsigned rows_expected(const rv565_clip_t *clip, uint16_t i, int windows)
     return rows;
 }
 
-static int setup(rv565_player_t *p, const rv565_clip_t *clip, int overlap, int two, int windows)
+/* Panel pixels a sequential present of frame i must send: for a region delta
+ * with column windows, the panel pixels whose source pixel lies in one of its
+ * bands' ranges; otherwise whole rows. Also the number of windows, at most
+ * one per band (0 when whole rows are expected). */
+static unsigned long pixels_expected(const rv565_clip_t *clip, uint16_t i, int mode,
+                                     unsigned *max_windows)
+{
+    static rv565_rect_t rects[4096];
+    size_t n;
+    *max_windows = 0;
+    const int region = rv565_frame_type(clip, i) == RV565_FRAME_REGION;
+    if (!region || mode < ROWS_AND_COLUMNS ||
+            rv565_changed_rects(clip, i, rects, 4096, &n) != RV565_OK || n > RV565_PLAYER_MAX_RUNS) {
+        return (unsigned long)rows_expected(clip, i, mode != FULL) * PW;
+    }
+    uint16_t xmap[PW], ymap[PH];
+    rv565_build_map(xmap, clip->header.width, PW);
+    rv565_build_map(ymap, clip->header.height, PH);
+    unsigned long pixels = 0;
+    for (size_t r = 0; r < n; ++r) {
+        uint16_t c0, nc;
+        if (rv565_byte_columns(clip->header.pixel_format, clip->header.width, rects[r].x0, rects[r].xw,
+                               &c0, &nc) != RV565_OK) return 999999;
+        unsigned rows = 0, cols = 0;
+        for (unsigned d = 0; d < PH; ++d) rows += ymap[d] >= rects[r].first && ymap[d] < rects[r].first + rects[r].count;
+        for (unsigned x = 0; x < PW; ++x) cols += xmap[x] >= c0 && xmap[x] < c0 + nc;
+        pixels += (unsigned long)rows * cols;
+        *max_windows += rows != 0 && cols != 0;
+    }
+    return pixels;
+}
+
+static int setup(rv565_player_t *p, const rv565_clip_t *clip, int overlap, int two, int mode)
 {
     static uint8_t s0[PW * ROWS * 2], s1[PW * ROWS * 2];
     static uint16_t xmap[PW], ymap[PH];
@@ -127,7 +189,9 @@ static int setup(rv565_player_t *p, const rv565_clip_t *clip, int overlap, int t
         .clip = clip, .panel_width = PW, .panel_height = PH, .stripe_rows = ROWS,
         .stripes = { s0, s1 }, .frames = { malloc(fb), two ? malloc(fb) : NULL },
         .xmap = xmap, .ymap = ymap,
-        .display = { NULL, begin, queue, wait_one, end, windows ? begin_rows : NULL },
+        .display = { NULL, begin, queue, wait_one, end,
+                     mode == ROWS_ONLY || mode == ROWS_AND_COLUMNS ? begin_rows : NULL,
+                     mode >= ROWS_AND_COLUMNS ? begin_window : NULL },
         .decoder = { NULL, overlap ? dec_start : NULL, overlap ? dec_finish : NULL, NULL },
         .micros = fake_micros,
     };
@@ -142,29 +206,32 @@ static int needs_two(const rv565_clip_t *clip)
     if (clip->header.codec != RV565_CODEC_ZLIB) return 0;
     for (uint16_t i = 0; i < clip->header.frames; ++i) {
         const int t = rv565_frame_type(clip, i);
-        if (t == RV565_FRAME_DELTA || t == RV565_FRAME_PARTIAL) return 1;
+        if (t == RV565_FRAME_DELTA || t == RV565_FRAME_PARTIAL || t == RV565_FRAME_REGION) return 1;
     }
     return 0;
 }
 
-static unsigned present_checked(rv565_player_t *p, const rv565_clip_t *clip, uint16_t i, const char *mode)
+static rv565_frame_stats_t present_checked(rv565_player_t *p, const rv565_clip_t *clip, uint16_t i,
+                                           const char *mode)
 {
     rv565_frame_stats_t st;
+    memset(&st, 0, sizeof(st));
     rv565_status_t s = rv565_player_present(p, i, &st);
-    if (s != RV565_OK) { FAIL("%s present %u: %s", mode, i, rv565_strerror(s)); return 0; }
+    if (s != RV565_OK) { FAIL("%s present %u: %s", mode, i, rv565_strerror(s)); return st; }
     failures += check_frame(clip, i, mode);
     if (queued != 0) FAIL("stripes left queued");
     if (job.pending) FAIL("%s: decode left pending", mode);
-    return st.rows_sent;
+    return st;
 }
 
 static unsigned long total_rows, partial_rows, partial_frames;
+static unsigned long region_frames, region_pixels, region_row_pixels;
 
 static void run(const rv565_clip_t *clip, int overlap, int two, int windows)
 {
-    char mode[64];
+    char mode[96];
     snprintf(mode, sizeof(mode), "%s/%s/%s", overlap ? "overlap" : "serial",
-             two ? "2 buffers" : "1 buffer", windows ? "row windows" : "full writes");
+             two ? "2 buffers" : "1 buffer", MODE_NAMES[windows]);
     rv565_player_t p;
     rv565_status_t st = setup(&p, clip, overlap, two, windows);
     if (!two && needs_two(clip)) {
@@ -178,13 +245,28 @@ static void run(const rv565_clip_t *clip, int overlap, int two, int windows)
     /* Sequential: each frame sends exactly the rows its changes need. */
     const uint16_t n = clip->header.frames;
     for (uint16_t i = 0; i < n; ++i) {
-        const unsigned rows = present_checked(&p, clip, i, mode);
-        const unsigned want = i == 0 ? PH : rows_expected(clip, i, windows);
+        column_windows = writes = 0;
+        const rv565_frame_stats_t fs = present_checked(&p, clip, i, mode);
+        const unsigned rows = fs.rows_sent;
+        const unsigned want = i == 0 ? PH : rows_expected(clip, i, windows != FULL);
         if (rows != want) FAIL("%s: frame %u sent %u rows, expected %u", mode, i, rows, want);
+        unsigned max_windows;
+        const unsigned long pixels = i == 0 ? (unsigned long)PW * PH : pixels_expected(clip, i, windows, &max_windows);
+        if (fs.pixels_sent != pixels)
+            FAIL("%s: frame %u sent %lu pixels, expected %lu", mode, i, (unsigned long)fs.pixels_sent, pixels);
+        if (i != 0 && max_windows != 0 && (writes == 0 || (unsigned)writes > max_windows))
+            FAIL("%s: frame %u used %d windows for %u bands", mode, i, writes, max_windows);
+        if (windows == ROWS_ONLY && column_windows != 0) FAIL("%s: column window without begin_window", mode);
         total_rows += rows;
-        if (windows && rv565_frame_type(clip, i) == RV565_FRAME_PARTIAL) {
+        const int type = rv565_frame_type(clip, i);
+        if (windows == ROWS_ONLY && type == RV565_FRAME_PARTIAL) {
             ++partial_frames;
             partial_rows += rows;
+        }
+        if (windows == ROWS_AND_COLUMNS && type == RV565_FRAME_REGION && i != 0) {
+            ++region_frames;
+            region_pixels += fs.pixels_sent;
+            region_row_pixels += (unsigned long)rows * PW;
         }
     }
 
@@ -208,15 +290,17 @@ static void play(const rv565_clip_t *clip, const char *name)
         teardown(&p);
         return;
     }
-    for (int windows = 0; windows < 2; ++windows) {
+    for (int windows = 0; windows < MODES; ++windows) {
         run(clip, 0, 0, windows);
         run(clip, 0, 1, windows);
         run(clip, 1, 1, windows);
     }
 }
 
-/* Stored rgb565be clip with keyframes every K, and random repeats, full
- * deltas and partial deltas (band heights 1-12, scattered bands). */
+/* Stored or zlib rgb565be clip with keyframes every K, and random repeats,
+ * full deltas and partial deltas (band heights 1-12, scattered bands, random
+ * shifts); with `region`, a version 8 clip where half the partial deltas are
+ * region deltas with a random whole-pixel range per band. */
 static uint32_t rng = 12345;
 static uint32_t next_rand(void) { rng = rng * 1103515245u + 12345u; return rng >> 8; }
 
@@ -243,13 +327,13 @@ static size_t zlib_store(const uint8_t *in, size_t n, uint8_t *out)
     return o;
 }
 
-static uint8_t *make_clip(uint16_t w, uint16_t h, uint16_t frames, uint8_t k, int zlib,
+static uint8_t *make_clip(uint16_t w, uint16_t h, uint16_t frames, uint8_t k, int zlib, int region,
                           uint8_t *truth, size_t *size)
 {
     const size_t row = (size_t)w * 2, fb = row * h;
-    uint8_t *out = malloc(16 + (size_t)frames * (4 + 1 + 1 + 1024 + fb));
+    uint8_t *out = malloc(16 + (size_t)frames * (4 + 1 + 1 + 4096 + fb + 64));
     uint8_t *prev = calloc(1, fb), *cur = malloc(fb);
-    const uint8_t header[16] = { 'R', 'V', '5', 7, (uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h,
+    const uint8_t header[16] = { 'R', 'V', '5', region ? 8 : 7, (uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h,
                                  (uint8_t)(h >> 8), 24, 0, (uint8_t)frames, (uint8_t)(frames >> 8),
                                  16, RV565_PIXEL_RGB565BE, zlib ? RV565_CODEC_ZLIB : RV565_CODEC_STORED, k };
     uint8_t *tmp = malloc(fb);
@@ -291,11 +375,13 @@ static uint8_t *make_clip(uint16_t w, uint16_t h, uint16_t frames, uint8_t k, in
                 mask[b >> 3] |= (uint8_t)(1u << (b & 7));
             }
             memcpy(cur, prev, fb);
-            rec[4] = RV565_FRAME_PARTIAL;
+            const int reg = region && r <= 3;
+            const size_t entry = reg ? 6 : 2;
+            rec[4] = reg ? RV565_FRAME_REGION : RV565_FRAME_PARTIAL;
             rec[5] = band;
             uint32_t changed = 0;
             for (uint32_t b = 0; b < bands; ++b) changed += mask[b >> 3] >> (b & 7) & 1;
-            uint8_t *shifts = mask + mask_len, *data = shifts + 2 * changed;
+            uint8_t *shifts = mask + mask_len, *data = shifts + entry * changed;
             size_t pos = 0, k = 0;
             for (uint32_t b = 0; b < bands; ++b) {
                 if (!(mask[b >> 3] >> (b & 7) & 1)) continue;
@@ -306,11 +392,22 @@ static uint8_t *make_clip(uint16_t w, uint16_t h, uint16_t frames, uint8_t k, in
                 if (next_rand() % 16 == 0) dx = next_rand() % 2 ? (int)row + 3 : -(int)row - 1;
                 if (dx > 127) dx = 127;
                 if (dx < -128) dx = -128;
-                shifts[2 * k] = (uint8_t)(int8_t)dx;
-                shifts[2 * k + 1] = (uint8_t)(int8_t)dy;
+                /* A whole-pixel range: often narrow, sometimes the whole line. */
+                size_t x0 = 0, xw = row;
+                if (reg && next_rand() % 5 != 0) {
+                    x0 = 2u * (next_rand() % w);
+                    xw = 2u * (1u + next_rand() % (w - x0 / 2u));
+                }
+                uint8_t *e = shifts + entry * k;
+                e[0] = (uint8_t)(int8_t)dx;
+                e[1] = (uint8_t)(int8_t)dy;
+                if (reg) {
+                    e[2] = (uint8_t)x0; e[3] = (uint8_t)(x0 >> 8);
+                    e[4] = (uint8_t)xw; e[5] = (uint8_t)(xw >> 8);
+                }
                 ++k;
                 for (uint32_t y = first; y < end; ++y) {
-                    for (size_t j = 0; j < row; ++j) {
+                    for (size_t j = x0; j < x0 + xw; ++j) {
                         const int32_t sy = (int32_t)y - dy;
                         const long sj = (long)j - dx;
                         const uint8_t pred = (sy >= (int32_t)first && sy < (int32_t)end && sj >= 0 && sj < (long)row)
@@ -321,7 +418,7 @@ static uint8_t *make_clip(uint16_t w, uint16_t h, uint16_t frames, uint8_t k, in
                     }
                 }
             }
-            len = 2 + mask_len + 2 * changed + pos;
+            len = 2 + mask_len + entry * changed + pos;
             dptr = data;
             dlen = pos;
         }
@@ -354,16 +451,18 @@ int main(int argc, char **argv)
         free(data);
     }
     /* Upscaled (40x30 -> 320x240) and downscaled (24x400 -> 320x240). */
-    const struct { uint16_t w, h, frames; uint8_t k; int zlib; } synth[] = {
-        { 40, 30, 48, 12, 0 }, { 24, 400, 40, 10, 0 }, { 40, 30, 40, 255, 0 },
-        { 40, 30, 48, 12, 1 }, { 24, 400, 40, 10, 1 },
+    const struct { uint16_t w, h, frames; uint8_t k; int zlib, region; } synth[] = {
+        { 40, 30, 48, 12, 0, 0 }, { 24, 400, 40, 10, 0, 0 }, { 40, 30, 40, 255, 0, 0 },
+        { 40, 30, 48, 12, 1, 0 }, { 24, 400, 40, 10, 1, 0 },
+        { 40, 30, 48, 12, 0, 1 }, { 24, 400, 40, 10, 0, 1 }, { 40, 30, 40, 255, 0, 1 },
+        { 40, 30, 48, 12, 1, 1 }, { 24, 400, 40, 10, 1, 1 }, { 600, 20, 30, 10, 1, 1 },
     };
     for (size_t s = 0; s < sizeof(synth) / sizeof(synth[0]); ++s, ++clips) {
         size_t size;
         const size_t fb = (size_t)synth[s].w * synth[s].h * 2;
         uint8_t *truth = malloc(synth[s].frames * fb), *frame = malloc(fb), *scratch = malloc(fb);
         uint8_t *data = make_clip(synth[s].w, synth[s].h, synth[s].frames, synth[s].k,
-                                  synth[s].zlib, truth, &size);
+                                  synth[s].zlib, synth[s].region, truth, &size);
         rv565_clip_t clip;
         rv565_status_t st = rv565_open(&clip, data, size, index, 65536, 0, 0);
         if (st != RV565_OK) {
@@ -382,8 +481,13 @@ int main(int argc, char **argv)
     }
     if (partial_frames == 0 || partial_rows >= partial_frames * PH)
         FAIL("partial deltas did not save rows (%lu rows over %lu frames)", partial_rows, partial_frames);
+    if (region_frames == 0 || region_pixels >= region_row_pixels)
+        FAIL("region deltas did not save pixels over row windows (%lu of %lu over %lu frames)",
+             region_pixels, region_row_pixels, region_frames);
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    fprintf(stderr, "player checks passed on %d clip(s) (serial 1/2 buffers, overlap; row windows and full writes); "
-            "partial deltas sent %lu of %lu panel rows\n", clips, partial_rows, partial_frames * PH);
+    fprintf(stderr, "player checks passed on %d clip(s) (serial 1/2 buffers, overlap; full writes, row windows, "
+            "row and column windows, column windows only); partial deltas sent %lu of %lu panel rows; "
+            "region deltas sent %lu of the %lu pixels their rows hold\n", clips, partial_rows,
+            partial_frames * PH, region_pixels, region_row_pixels);
     return 0;
 }

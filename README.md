@@ -16,8 +16,10 @@ header: RGB565 in either byte order, RGB444, RGB666 and RGB888 for colour
 TFTs, 8- and 4-bit grayscale, and 1-bit monochrome in rows (e-paper, memory
 LCDs) or in pages (SSD1306-class OLEDs). Frames are stored or zlib-compressed
 keyframes, exact XOR deltas or repeats, with a keyframe at least every `K`
-frames ([specification](docs/FORMAT.md)). Version 6 files, every frame an
-independent zlib stream of RGB565, still play.
+frames ([specification](docs/FORMAT.md)). Format version 8 (RV565 3.0) adds
+region deltas, which record exactly which part of each band of rows changed,
+so a player sends the display only those pixels, one window per band. Version
+7 and version 6 files still play.
 
 - **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2),
   measured with version 6: core 1 inflates the next frame while core 0 scales
@@ -37,8 +39,8 @@ independent zlib stream of RGB565, still play.
 - **Fast seeking and local error recovery**: any frame is at most `K` − 1
   records from a keyframe (`K` = 1 makes every frame independent).
 - **Tested without hardware**: every implementation decodes the same
-  conformance files (`tests/data/v7`) in CI and must match each frame's
-  SHA-256.
+  conformance files (`tests/data/v7`, `tests/data/v8`) in CI and must match
+  each frame's SHA-256 and the windows it sends.
 
 The design and measurements are described in
 *RV565: Cross-Layer Co-Design for Frame-Independent Video Playback on
@@ -68,9 +70,11 @@ MicroPython-Class ESP32-S3 Systems*
 
 **What you can rely on**
 
-- **Files keep playing.** Version 7 is covered by the 2.x compatibility
-  promise, and 2.x still plays version 6 files. For players still on 1.x,
-  write version 6 with `rv565 encode --v6` ([specification](docs/FORMAT.md)).
+- **Files keep playing.** Version 8 is covered by the 3.x compatibility
+  promise, and 3.x still plays version 7 and version 6 files. A file is only
+  written as version 8 when it uses region deltas; for players still on 2.x,
+  write version 7 with `rv565 encode --v7`, and for 1.x, version 6 with
+  `--v6` ([specification](docs/FORMAT.md)).
 - **Damaged files are rejected, not drawn.** Readers validate the header and
   every record, and a frame only counts if it decodes to exactly its size.
 - **Verified hardware:** the ESP32-S3 and the RP2350, each with a 320x240
@@ -166,6 +170,7 @@ python3 tools/rv565.py info clip.rv565      # sizes and predicted late frames
 
 # Other displays: pick the pixel format the panel takes
 python3 tools/rv565.py encode input.mp4 oled.rv565 --size 128x64 --fps 15 --format mono_vpage
+python3 tools/rv565.py encode input.mp4 v7.rv565 --v7   # for players older than 3.0
 python3 tools/rv565.py encode input.mp4 old.rv565 --v6   # for players older than 2.0
 python3 tools/rv565.py c-array clip.rv565 clip.h   # for Arduino sketches
 ```

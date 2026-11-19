@@ -12,13 +12,15 @@
 
 #define CORE1_STACK_WORDS (24 * 1024 / 4) /* tinfl keeps ~11 KB on the stack */
 #define RV565_RP2_COMMAND_HZ (10u * 1000u * 1000u)
+#define WINDOW_ROWS    1
+#define WINDOW_COLUMNS 2
 
 static struct {
     spi_inst_t *spi;
     rv565_rp2_display_config_t cfg;
     unsigned command_hz;
     int dma;
-    int windowed;      /* a row window is set; restore before a full frame */
+    int windowed;      /* WINDOW_ROWS | WINDOW_COLUMNS set; restored before full writes */
 } disp;
 
 static void spi_bytes(const uint8_t *data, size_t length)
@@ -38,12 +40,15 @@ static void command(uint8_t cmd, const uint8_t *data, size_t length)
     gpio_put(disp.cfg.pin_cs, 1);
 }
 
-/* Commands at the safe rate: an optional RASET, then RAMWR; pixel data
- * follows at the full rate. */
-static void start_write(const uint8_t *raset)
+/* Commands at the safe rate: an optional CASET and RASET, then RAMWR; pixel
+ * data follows at the full rate. */
+static void start_write(const uint8_t *caset, const uint8_t *raset)
 {
     const uint8_t ramwr = RV565_ST7789_RAMWR;
     spi_set_baudrate(disp.spi, disp.command_hz);
+    if (caset != NULL) {
+        command(RV565_ST7789_CASET, caset, 4);
+    }
     if (raset != NULL) {
         command(RV565_ST7789_RASET, raset, 4);
     }
@@ -54,16 +59,28 @@ static void start_write(const uint8_t *raset)
     spi_set_baudrate(disp.spi, (unsigned)disp.cfg.clock_hz);
 }
 
+/* CASET restoring the full column window after a region update, or NULL. */
+static const uint8_t *full_columns(uint8_t caset[4])
+{
+    if (!(disp.windowed & WINDOW_COLUMNS)) {
+        return NULL;
+    }
+    rv565_st7789_columns(&disp.cfg.panel, 0, rv565_panel_resolve(&disp.cfg.panel).width, caset);
+    disp.windowed &= ~WINDOW_COLUMNS;
+    return caset;
+}
+
 static void begin_frame(void *ctx)
 {
     (void)ctx;
-    uint8_t raset[4];
-    if (disp.windowed) {
+    uint8_t caset[4], raset[4];
+    const uint8_t *cols = full_columns(caset);
+    if (disp.windowed & WINDOW_ROWS) {
         rv565_st7789_rows(&disp.cfg.panel, 0, rv565_panel_resolve(&disp.cfg.panel).height, raset);
-        disp.windowed = 0;
-        start_write(raset);
+        disp.windowed &= ~WINDOW_ROWS;
+        start_write(cols, raset);
     } else {
-        start_write(NULL);
+        start_write(cols, NULL);
     }
 }
 
@@ -71,10 +88,22 @@ static void begin_frame(void *ctx)
 static void begin_rows(void *ctx, uint16_t first, uint16_t rows)
 {
     (void)ctx;
-    uint8_t raset[4];
+    uint8_t caset[4], raset[4];
+    const uint8_t *cols = full_columns(caset);
     rv565_st7789_rows(&disp.cfg.panel, first, rows, raset);
-    disp.windowed = 1;
-    start_write(raset);
+    disp.windowed |= WINDOW_ROWS;
+    start_write(cols, raset);
+}
+
+/* Region update: columns x .. x + w - 1 of rows y .. y + h - 1. */
+static void begin_window(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    (void)ctx;
+    uint8_t caset[4], raset[4];
+    rv565_st7789_columns(&disp.cfg.panel, x, w, caset);
+    rv565_st7789_rows(&disp.cfg.panel, y, h, raset);
+    disp.windowed = WINDOW_ROWS | WINDOW_COLUMNS;
+    start_write(caset, raset);
 }
 
 /* The player keeps at most one stripe in flight when it queues the next, so
@@ -169,6 +198,7 @@ rv565_status_t rv565_rp2_display_init(const rv565_rp2_display_config_t *cfg,
     ops->wait_stripe = wait_stripe;
     ops->end_frame = end_frame;
     ops->begin_rows = begin_rows;
+    ops->begin_window = begin_window;
     return RV565_OK;
 }
 

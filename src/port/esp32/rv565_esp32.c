@@ -14,13 +14,15 @@
 #include "../st7789_init.h"
 
 #define WORKER_STACK (24 * 1024)
+#define WINDOW_ROWS    1
+#define WINDOW_COLUMNS 2
 
 static struct {
     spi_device_handle_t dev;
     rv565_esp32_display_config_t cfg;
     spi_transaction_t slots[2]; /* one per in-flight stripe */
     int next_slot;
-    int windowed;               /* a row window is set; restore before a full frame */
+    int windowed;               /* WINDOW_ROWS | WINDOW_COLUMNS set; restored before full writes */
 } disp;
 
 static void poll_bytes(const void *data, size_t length)
@@ -57,12 +59,29 @@ static void set_rows(uint16_t first, uint16_t rows)
     command(RV565_ST7789_RASET, raset, sizeof(raset));
 }
 
+static void set_columns(uint16_t first, uint16_t cols)
+{
+    uint8_t caset[4];
+    rv565_st7789_columns(&disp.cfg.panel, first, cols, caset);
+    command(RV565_ST7789_CASET, caset, sizeof(caset));
+}
+
+/* Restore the full column window after a region update. */
+static void full_columns(void)
+{
+    if (disp.windowed & WINDOW_COLUMNS) {
+        set_columns(0, rv565_panel_resolve(&disp.cfg.panel).width);
+        disp.windowed &= ~WINDOW_COLUMNS;
+    }
+}
+
 static void begin_frame(void *ctx)
 {
     (void)ctx;
-    if (disp.windowed) {
+    full_columns();
+    if (disp.windowed & WINDOW_ROWS) {
         set_rows(0, rv565_panel_resolve(&disp.cfg.panel).height);
-        disp.windowed = 0;
+        disp.windowed &= ~WINDOW_ROWS;
     }
     start_ramwr();
 }
@@ -71,8 +90,19 @@ static void begin_frame(void *ctx)
 static void begin_rows(void *ctx, uint16_t first, uint16_t rows)
 {
     (void)ctx;
+    full_columns();
     set_rows(first, rows);
-    disp.windowed = 1;
+    disp.windowed |= WINDOW_ROWS;
+    start_ramwr();
+}
+
+/* Region update: columns x .. x + w - 1 of rows y .. y + h - 1. */
+static void begin_window(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    (void)ctx;
+    set_columns(x, w);
+    set_rows(y, h);
+    disp.windowed = WINDOW_ROWS | WINDOW_COLUMNS;
     start_ramwr();
 }
 
@@ -168,6 +198,7 @@ rv565_status_t rv565_esp32_display_init(const rv565_esp32_display_config_t *cfg,
     ops->wait_stripe = wait_stripe;
     ops->end_frame = end_frame;
     ops->begin_rows = begin_rows;
+    ops->begin_window = begin_window;
     return RV565_OK;
 }
 

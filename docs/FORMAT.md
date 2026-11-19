@@ -1,4 +1,4 @@
-# RV565 container format, version 7
+# RV565 container format, version 8
 
 RV565 stores video for microcontrollers as frames whose decoded bytes are
 already in the native pixel format of the display, so a player only
@@ -13,9 +13,17 @@ Partial deltas store only the bands of rows that changed, so a player decodes
 and sends to the display only those bands: on these boards the display bus,
 not the decoder, limits the frame rate.
 
-Version 7 readers also read version 6 files (see
-[Version 6](#version-6)), which are the special case RGB565 big-endian, zlib,
-every frame a keyframe.
+Version 8 adds one frame type to version 7: the *region delta*, a partial
+delta whose changed bands also say which range of each line changed. A player
+sends each changed band as one window covering just that range, so a frame
+costs the display bus only the pixels that changed, in a handful of windows.
+Nothing else differs: a version 8 file that contains no region delta is a
+valid version 7 file apart from its version byte, and writers write version 7
+unless they use region deltas.
+
+Version 8 readers also read version 7 and version 6 files (see
+[Version 6](#version-6)); version 6 is the special case RGB565 big-endian,
+zlib, every frame a keyframe.
 
 ## Identification
 
@@ -23,7 +31,7 @@ every frame a keyframe.
 | --- | --- |
 | Extension | `.rv565` |
 | MIME type | `video/x-rv565` |
-| Signature | `RV5` at offset 0, version `6` or `7` at offset 3, a frame rate at offset 8 (1–30 in version 6, 1–60 in version 7) |
+| Signature | `RV5` at offset 0, version `6`, `7` or `8` at offset 3, a frame rate at offset 8 (1–30 in version 6, 1–60 in versions 7 and 8) |
 
 Signatures for `file(1)`, shared-mime-info, PRONOM and Kaitai Struct are in
 `contrib/`.
@@ -35,7 +43,7 @@ All multi-byte integers are little-endian.
 | Offset | Size | Field | Constraint |
 | --- | --- | --- | --- |
 | 0 | 3 | Magic | ASCII `RV5` |
-| 3 | 1 | Version | `7` |
+| 3 | 1 | Version | `7`, or `8` if the file contains a region delta |
 | 4 | 2 | Width `w` | ≥ 1 |
 | 6 | 2 | Height `h` | ≥ 1 |
 | 8 | 1 | Frames per second | 1–60 |
@@ -49,7 +57,7 @@ All multi-byte integers are little-endian.
 
 The fields at offsets 0–11 are where version 6 has them, so tools that print
 the size, rate and frame count of a version 6 file can do the same for
-version 7. `H` lets a later minor revision append header fields without
+versions 7 and 8. The header is the same in versions 7 and 8. `H` lets a later minor revision append header fields without
 breaking version 7 readers. Unknown pixel formats, codecs and frame types
 cannot be skipped safely, so readers reject them.
 
@@ -70,8 +78,10 @@ file ends exactly after the last one. Each record is:
 | 1 | Delta | `F[i] XOR F[i−1]`, encoded with the codec | `F[i−1] XOR` the decoded body |
 | 2 | Repeat | empty (`L` = 1) | `F[i−1]` |
 | 3 | Partial delta | band height, band mask, a shift for each changed band, then the changed bands' residuals, encoded with the codec | `F[i−1]` with each changed band replaced by its prediction XOR its residual |
+| 4 | Region delta (version 8) | band height, band mask, a shift and a byte range for each changed band, then the residuals of those ranges, encoded with the codec | `F[i−1]` with the range of each changed band's lines replaced by its prediction XOR its residual |
 
-Other types are reserved; readers reject them.
+Type 4 is reserved in version 7 files. Other types are reserved; readers
+reject them.
 
 **Partial delta.** The frame's bytes are `P` lines of `R` bytes each: pixel
 rows for formats 0–7 (`P = h`), pages of 8 rows for `mono_vpage` (`P = ⌈h /
@@ -95,6 +105,40 @@ the changed bands to the display.
 
 A prediction never reaches outside its band, so a decoder working in place
 needs a scratch copy of one band, not of the previous frame.
+
+**Region delta** (version 8). The same as a partial delta, except that each
+changed band also stores the range of bytes along its lines that changed, and
+only that range has a residual. The body is:
+
+| Size | Field |
+| --- | --- |
+| 1 | Band height `B` in lines, ≥ 1 |
+| `⌈N / 8⌉` | Band mask, as in a partial delta |
+| 6 per changed band | In band order: signed bytes `dx` and `dy`, as in a partial delta; then `x0` and `xw`, unsigned 16-bit little-endian: the band's range is bytes `x0` to `x0 + xw − 1` of each of its lines |
+| rest | The residuals of the changed bands' ranges, in band order, each band line by line (`xw` bytes per line), concatenated and encoded with the codec |
+
+A range has `xw` ≥ 1 and `x0 + xw` ≤ `R`, and starts and ends on whole
+pixels: `x0` is a multiple of the format's alignment `A`, and `x0 + xw` is a
+multiple of `A` or equal to `R`.
+
+| Pixel format | `A` (bytes) | Pixels in `A` bytes |
+| --- | --- | --- |
+| `rgb565be`, `rgb565le` | 2 | 1 |
+| `rgb444` | 3 | 2 |
+| `rgb666`, `rgb888` | 3 | 1 |
+| `gray8` | 1 | 1 |
+| `gray4` | 1 | 2 |
+| `mono` | 1 | 8 |
+| `mono_vpage` | 1 | 1 column of the page's 8 rows |
+
+Within the range, byte `j` of line `y` of `F[i]` is the prediction of that
+byte (defined exactly as for a partial delta, from the whole line of `F[i−1]`)
+XOR the residual; outside the range, and in every unchanged band, `F[i]`
+equals `F[i−1]`. The decoded data is exactly the sum over changed bands of
+`xw` times the band's line count. A player may send only each changed band's
+range to the display, as one window: columns `x0 / A × p` to
+`(x0 + xw) / A × p − 1` (fewer at the end of a line), where `p` is the
+number of pixels in `A` bytes, and the band's rows.
 
 **Keyframe interval.** Every frame `i` with `i mod K = 0` must be a
 keyframe, frame 0 included. Encoders may make other frames keyframes too. A
@@ -146,10 +190,10 @@ encoder inverts the image; the format itself always means 1 lit.
 
 A conforming reader rejects a file when any of these hold:
 
-- the magic differs, or the version is not 6 or 7;
+- the magic differs, or the version is not 6, 7 or 8;
 - width, height or frame count is 0, or the rate is out of range;
-- in version 7: `H` < 16, or the pixel format, codec or a frame type is
-  reserved, or `K` = 0;
+- in versions 7 and 8: `H` < 16, or the pixel format, codec or a frame type
+  is reserved (type 4 is reserved in version 7), or `K` = 0;
 - a record length is 0 or runs past the end of the data, or bytes remain
   after the last record;
 - a frame `i` with `i mod K = 0` is not a keyframe;
@@ -158,6 +202,10 @@ A conforming reader rejects a file when any of these hold:
 - a partial delta has `B` = 0, is too short for its mask and shifts, sets no
   band or a bit from `N` on, has a shift with `|dy|` ≥ `B`, or (stored) its
   data is not exactly the size of its changed bands;
+- a region delta fails any of those checks (with 6 bytes per changed band
+  instead of 2), or has a range with `xw` = 0, `x0 + xw` > `R`, or an
+  unaligned start or end, or (stored) its data is not exactly the size of
+  its ranges;
 - zlib data does not inflate to exactly its expected size.
 
 All but the last are checked when the file is opened, by one linear scan of
@@ -173,7 +221,8 @@ to a scratch buffer of `S` bytes and is XORed into the previous frame); a
 repeat costs nothing and need not be sent to the display again. A partial
 delta is decoded like a delta but only over its changed bands, and only those
 bands need to be sent to the display: on SPI panels, set the column and row
-window to each run of changed bands.
+window to each run of changed bands. A region delta is decoded the same way
+over its ranges, and each changed band's range is one window.
 
 To seek to frame `i`, decode keyframe `k = i − (i mod K)`, then apply records
 `k + 1` … `i`.
@@ -185,7 +234,8 @@ which lookup is O(1). Inflate time depends only on the body: the RV565 paper
 (arXiv:2610.35935) measured it as linear in `L` on the ESP32-S3, so a reader
 can predict from the length table alone whether a clip will play at its rate
 before decoding anything. A delta adds one pass of XOR over `S` bytes; a
-partial delta, one pass over its changed bands. The band mask also tells a
+partial delta, one pass over its changed bands; a region delta, one pass
+over its ranges. The band mask (and a region delta's ranges) also tell a
 player how much of the frame it must transfer, before decoding.
 
 ## Writing
@@ -205,6 +255,15 @@ the others; a range of `m` pixels is `2m`, `3m`, `3⌊m / 2⌋`, `m`, `⌊m / 2�
 `gray8`, `gray4`, `mono` and `mono_vpage`. It keeps the first shift with the
 fewest nonzero residual bytes. It uses zlib level 1, the configuration the paper measured, unless
 told otherwise.
+
+It also builds a region delta, unless asked for version 7: each changed
+band's range is the bytes that differ from `F[i−1]` in any of its lines,
+widened to whole pixels, and the shift search counts nonzero residual bytes
+inside that range. It prefers a region delta, then a partial delta, whenever
+that is at most 2% (and at least 16 bytes) larger than the smallest option,
+and does not write a region delta whose every range is a whole line (a
+partial delta says the same in fewer bytes). A file is written as version 8
+only if it contains a region delta.
 
 **Tolerance** (encoder only; the format is unchanged). With a tolerance `T`
 of 1–255, the encoder keeps a pixel of the previous decoded frame wherever
@@ -232,13 +291,15 @@ Version 6 is the format of RV565 1.x. Its header is the first 12 bytes above
 with version `6` and a rate of 1–30; records start at offset 12 and are a
 32-bit length followed by a zlib stream, with no type byte. A version 7
 reader treats it as `H` = 12, pixel format 0, codec 1, `K` = 1, every record
-a keyframe. Writers can still produce it for players that predate 2.0.
+a keyframe. Writers can still produce it for players that predate 2.0, and
+version 7 for players that predate 3.0.
 
 ## Conformance vectors
 
 `tests/data/v7/` holds one file per pixel format and codec, clips with
-deltas, partial deltas and repeats, the version 6 test pattern, and invalid files.
-`tests/data/v7/manifest.json` lists, for every valid file, its header fields
+deltas, partial deltas and repeats, the version 6 test pattern, and invalid
+files; `tests/data/v8/` holds clips with region deltas in every pixel format
+and codec, and invalid region deltas. Each directory's `manifest.json` lists, for every valid file, its header fields
 and the SHA-256 of each decoded frame, and for every invalid file the reason
 it must be rejected. Every RV565 implementation (the C library, the Python
 package, CircuitPython, the browser converter and the MicroPython module)

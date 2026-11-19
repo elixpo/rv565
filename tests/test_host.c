@@ -111,6 +111,76 @@ static void v7_checks(void)
     }
 }
 
+/* Region delta helpers: alignment, byte range to pixel columns, and the
+ * body-level functions on a hand-made gray8 body. */
+static void v8_checks(void)
+{
+    static const uint8_t align[RV565_PIXEL_FORMATS] = { 2, 2, 3, 3, 3, 1, 1, 1, 1 };
+    for (uint8_t f = 0; f < RV565_PIXEL_FORMATS; ++f) {
+        EXPECT(rv565_pixel_align(f) == align[f], "pixel alignment");
+    }
+    EXPECT(rv565_pixel_align(RV565_PIXEL_FORMATS) == 0, "reserved format has no alignment");
+    const struct { uint8_t fmt; uint16_t w; uint32_t x0, xw; int ok; uint16_t c0, n; } cols[] = {
+        { RV565_PIXEL_RGB565BE, 21, 4, 16, 1, 2, 8 },
+        { RV565_PIXEL_RGB565LE, 21, 0, 42, 1, 0, 21 },
+        { RV565_PIXEL_RGB444, 21, 3, 6, 1, 2, 4 },
+        { RV565_PIXEL_RGB444, 21, 30, 2, 1, 20, 1 },   /* odd width: the last byte pair is one pixel */
+        { RV565_PIXEL_RGB888, 21, 6, 9, 1, 2, 3 },
+        { RV565_PIXEL_GRAY4, 21, 10, 1, 1, 20, 1 },    /* the last byte holds one pixel */
+        { RV565_PIXEL_GRAY4, 21, 2, 3, 1, 4, 6 },
+        { RV565_PIXEL_MONO, 21, 1, 2, 1, 8, 13 },      /* clamped to the width */
+        { RV565_PIXEL_MONO_VPAGE, 21, 5, 7, 1, 5, 7 },
+        { RV565_PIXEL_GRAY8, 21, 21, 1, 0, 0, 0 },     /* past the line */
+        { RV565_PIXEL_GRAY8, 21, 3, 0, 0, 0, 0 },      /* empty */
+        { 9, 21, 0, 1, 0, 0, 0 },                      /* reserved format */
+    };
+    for (size_t k = 0; k < sizeof(cols) / sizeof(cols[0]); ++k) {
+        uint16_t c0 = 0xFFFF, n = 0xFFFF;
+        const rv565_status_t st = rv565_byte_columns(cols[k].fmt, cols[k].w, cols[k].x0, cols[k].xw, &c0, &n);
+        EXPECT(cols[k].ok ? st == RV565_OK && c0 == cols[k].c0 && n == cols[k].n : st == RV565_ERR_ARG,
+               "byte range to columns");
+    }
+
+    /* gray8 4x4, band height 2, band 1 changed: dx = -1, dy = 0, bytes 1-2. */
+    const uint8_t body[] = { 2, 0x02, 0xFF, 0x00, 1, 0, 2, 0, 0x10, 0x20, 0x30, 0x40 };
+    uint8_t frame[16], prev[16], out[16];
+    for (int k = 0; k < 16; ++k) prev[k] = (uint8_t)k;
+    memcpy(frame, prev, 16);
+    EXPECT(rv565_apply_region(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, RV565_CODEC_STORED,
+                              frame, frame, NULL, 0) == RV565_OK, "region delta applies in place");
+    /* Line 2 is 8 9 10 11: bytes 1, 2 predict 9 ^ ... from j + 1 (dx = -1): 10, 11. */
+    const uint8_t want[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 10 ^ 0x10, 11 ^ 0x20, 11, 12, 14 ^ 0x30, 15 ^ 0x40, 15 };
+    EXPECT(memcmp(frame, want, 16) == 0, "region delta: prediction XOR residual inside the range only");
+    memset(out, 0xEE, 16);
+    EXPECT(rv565_apply_region(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, RV565_CODEC_STORED,
+                              prev, out, NULL, 0) == RV565_OK && memcmp(out, want, 16) == 0,
+           "region delta into another buffer");
+    EXPECT(rv565_apply_region(body, sizeof(body) - 1, 4, 4, RV565_PIXEL_GRAY8, RV565_CODEC_STORED,
+                              prev, out, NULL, 0) == RV565_ERR_RECORD, "stored region size checked");
+    EXPECT(rv565_apply_region(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, RV565_CODEC_ZLIB,
+                              frame, frame, NULL, 0) == RV565_ERR_ARG, "zlib region in place needs scratch");
+    EXPECT(rv565_apply_region(body, sizeof(body), 4, 4, RV565_PIXEL_RGB565BE, RV565_CODEC_STORED,
+                              prev, out, NULL, 0) == RV565_ERR_PARTIAL, "range checked against the alignment");
+    rv565_rect_t rects[2];
+    rv565_line_run_t runs[2];
+    size_t n = 0;
+    EXPECT(rv565_region_rects(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, rects, 2, &n) == RV565_OK && n == 1 &&
+           rects[0].first == 2 && rects[0].count == 2 && rects[0].x0 == 1 && rects[0].xw == 2, "region rects");
+    EXPECT(rv565_region_runs(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, runs, 2, &n) == RV565_OK && n == 1 &&
+           runs[0].first == 2 && runs[0].count == 2, "region runs");
+    EXPECT(rv565_region_rects(body, sizeof(body), 4, 4, RV565_PIXEL_GRAY8, rects, 0, &n) == RV565_ERR_ARG && n == 1,
+           "region rects count with a small array");
+    uint8_t bad[sizeof(body)];
+    memcpy(bad, body, sizeof(body));
+    bad[1] = 0x04;  /* band 2 of 2 */
+    EXPECT(rv565_region_rects(bad, sizeof(bad), 4, 4, RV565_PIXEL_GRAY8, rects, 2, &n) == RV565_ERR_PARTIAL,
+           "band past the frame");
+    memcpy(bad, body, sizeof(body));
+    bad[6] = 4;  /* xw = 4 from x0 = 1 runs past the line */
+    EXPECT(rv565_region_rects(bad, sizeof(bad), 4, 4, RV565_PIXEL_GRAY8, rects, 2, &n) == RV565_ERR_PARTIAL,
+           "range past the line");
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) { fprintf(stderr, "usage: %s file.rv565\n", argv[0]); return 2; }
@@ -167,6 +237,7 @@ int main(int argc, char **argv)
 
     malformed(data, size);
     v7_checks();
+    v8_checks();
     free(frame);
     free(data);
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
