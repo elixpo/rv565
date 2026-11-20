@@ -76,6 +76,8 @@ def cmd_encode(args):
 
 
 def container_options(args):
+    if args.v6 and args.v7:
+        raise SystemExit("choose one of --v6 and --v7")
     if args.keyframe_interval is None:
         args.keyframe_interval = 1 if args.v6 else min(args.fps, 255)
     if args.v6:
@@ -88,13 +90,16 @@ def container_options(args):
         return {"version": 6}
     return {"pixel_format": args.format, "codec": args.codec,
             "keyframe_interval": args.keyframe_interval, "band_lines": args.band_lines,
-            "tolerance": args.tolerance, "motion_range": args.motion_range}
+            "tolerance": args.tolerance, "motion_range": args.motion_range,
+            "version": 7 if args.v7 else None}
 
 
 def describe(args):
     if args.v6:
         return "version 6"
     text = "%s, %s, keyframe every %d" % (args.format, args.codec, args.keyframe_interval)
+    if args.v7:
+        text = "version 7, " + text
     if args.tolerance:
         text += ", tolerance %d" % args.tolerance
     return text
@@ -117,13 +122,18 @@ def cmd_info(args):
         h.version, h.width, h.height, h.fps, h.frames, h.duration))
     print("pixels    %s, %d bytes per frame" % (h.pixel_format, h.frame_bytes))
     types = [clip.frame_type(i) for i in range(len(clip))]
-    print("frames    %s, keyframe interval %d: %d key, %d delta, %d partial, %d repeat" % (
-        h.codec, h.keyframe_interval, types.count("key"), types.count("delta"),
-        types.count("partial"), types.count("repeat")))
+    print("frames    %s, keyframe interval %d: %d key, %d delta, %d partial, %d region, "
+          "%d repeat" % (h.codec, h.keyframe_interval, types.count("key"), types.count("delta"),
+                         types.count("partial"), types.count("region"), types.count("repeat")))
     lines = frame_lines(h.pixel_format, h.width, h.height)[0]
     sent = [sum(n for _, n in clip.changed_lines(i)) for i in range(len(clip))]
     print("display   %.0f%% of lines sent per frame on average (repeats and unchanged "
           "bands skipped)" % (100.0 * sum(sent) / (lines * len(sent))))
+    line_bytes = frame_lines(h.pixel_format, h.width, h.height)[1]
+    area = [sum(n * xw for _, n, _, xw in clip.changed_rects(i)) for i in range(len(clip))]
+    windows = [len(clip.changed_rects(i)) for i in range(len(clip))]
+    print("          %.0f%% of pixels sent per frame, in %.1f windows on average" % (
+        100.0 * sum(area) / (lines * line_bytes * len(area)), sum(windows) / len(windows)))
     print("size      %d bytes (raw %d, ratio %.2fx)" % (len(clip.data), raw, raw / len(clip.data)))
     coded = [s for s in sizes if s] or [0]
     print("payloads  min %d, mean %.0f, max %d bytes" % (
@@ -227,6 +237,10 @@ def add_container_args(p):
                         "of RGB565's red and blue")
     p.add_argument("--v6", action="store_true",
                    help="write a version 6 file for players older than RV565 2.0")
+    p.add_argument("--v7", action="store_true",
+                   help="write a version 7 file (no region deltas) for players older "
+                        "than RV565 3.0; by default the file is version 8 only if it "
+                        "uses region deltas")
 
 
 def main(argv=None):

@@ -252,7 +252,7 @@ class ConformanceTest(unittest.TestCase):
             rv565.frame_size("rgb332", 1, 1)
 
     def test_version(self):
-        self.assertEqual(rv565.__version__, "2.0.1")
+        self.assertEqual(rv565.__version__, "3.0.0")
 
 
 def expected_rgb(item, frame):
@@ -427,11 +427,13 @@ def square_frames(fmt, count=12):
     return frames
 
 
-def square_clip(fmt="rgb565be", codec="zlib"):
+def square_clip(fmt="rgb565be", codec="zlib", version=7):
+    """The square clip as version 7 (partial deltas) or, with version=None,
+    as the encoder's default (version 8, region deltas)."""
     frames = square_frames(fmt)
     out = io.BytesIO()
     REFERENCE.write(out, W, H, 12, frames, pixel_format=fmt, codec=codec,
-                    keyframe_interval=30, band_lines=4)
+                    keyframe_interval=30, band_lines=4, version=version)
     return out.getvalue(), frames
 
 

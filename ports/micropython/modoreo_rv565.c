@@ -1,6 +1,6 @@
 // Firmware-resident RV565 frame decoding for FaleraOS on ESP32-S3.
 //
-// The Python side parses the container (version 6 or 7, see docs/FORMAT.md)
+// The Python side parses the container (version 6, 7 or 8, see docs/FORMAT.md)
 // and hands each frame body to this module, which decodes it into a reused
 // frame buffer without allocating a Python bytes object or running Deflate or
 // the XOR pass through the MicroPython layer. The ESP32-S3 ROM already
@@ -21,6 +21,18 @@
 //                                         enough). Returns the changed line
 //                                         runs as a list of (first, count), to
 //                                         send only those rows to the display.
+//   apply_region(body, frame, line_bytes, pixel_format, zlib[, scratch])
+//                                         region delta (frame type 4, format
+//                                         version 8), in place: within each
+//                                         changed band's byte range, frame
+//                                         becomes the shifted prediction XOR
+//                                         the residual; the rest is unchanged.
+//                                         pixel_format is the header's byte
+//                                         (0-8). Scratch as for apply_partial.
+//                                         Returns the changed rectangles as a
+//                                         list of (first line, line count,
+//                                         first byte, byte count), one per
+//                                         band, each one display window.
 //
 // A repeat frame needs nothing: the previous frame is already decoded.
 // Every function raises ValueError unless the body inflates to exactly
@@ -165,9 +177,61 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
     oreo_rv565_apply_partial
 );
 
+static mp_obj_t oreo_rv565_apply_region(size_t n_args, const mp_obj_t *args) {
+    mp_buffer_info_t body, frame, scratch = {0};
+    mp_get_buffer_raise(args[0], &body, MP_BUFFER_READ);
+    mp_get_buffer_raise(args[1], &frame, MP_BUFFER_WRITE);
+    const mp_int_t line_bytes = mp_obj_get_int(args[2]);
+    const mp_int_t pixel_format = mp_obj_get_int(args[3]);
+    const int zlib = mp_obj_is_true(args[4]);
+    if (n_args > 5) {
+        mp_get_buffer_raise(args[5], &scratch, MP_BUFFER_WRITE);
+    }
+    if (line_bytes <= 0 || frame.len % (size_t)line_bytes != 0 ||
+            frame.len / (size_t)line_bytes > 0xFFFF) {
+        mp_raise_ValueError(MP_ERROR_TEXT("RV565 frame is not whole lines"));
+    }
+    if (pixel_format < 0 || pixel_format >= RV565_PIXEL_FORMATS) {
+        mp_raise_ValueError(MP_ERROR_TEXT("unsupported RV565 pixel format"));
+    }
+    const uint16_t lines = (uint16_t)(frame.len / (size_t)line_bytes);
+    rv565_status_t st = rv565_apply_region(
+        body.buf, (uint32_t)body.len, lines, (size_t)line_bytes, (uint8_t)pixel_format,
+        zlib ? RV565_CODEC_ZLIB : RV565_CODEC_STORED,
+        frame.buf, frame.buf, scratch.buf, scratch.len);
+    if (st != RV565_OK) {
+        mp_raise_ValueError(st == RV565_ERR_ARG
+            ? MP_ERROR_TEXT("RV565 region delta needs a scratch buffer")
+            : MP_ERROR_TEXT("invalid RV565 region delta"));
+    }
+    /* One rectangle per changed band: count them, then fill a temporary array. */
+    size_t count = 0;
+    rv565_region_rects(body.buf, (uint32_t)body.len, lines, (size_t)line_bytes,
+                       (uint8_t)pixel_format, NULL, 0, &count);
+    rv565_rect_t *rects = m_new(rv565_rect_t, count);
+    rv565_region_rects(body.buf, (uint32_t)body.len, lines, (size_t)line_bytes,
+                       (uint8_t)pixel_format, rects, count, &count);
+    mp_obj_t list = mp_obj_new_list(0, NULL);
+    for (size_t k = 0; k < count; ++k) {
+        mp_obj_t rect[4] = {
+            MP_OBJ_NEW_SMALL_INT(rects[k].first),
+            MP_OBJ_NEW_SMALL_INT(rects[k].count),
+            mp_obj_new_int_from_uint(rects[k].x0),
+            mp_obj_new_int_from_uint(rects[k].xw),
+        };
+        mp_obj_list_append(list, mp_obj_new_tuple(4, rect));
+    }
+    m_del(rv565_rect_t, rects, count);
+    return list;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+    oreo_rv565_apply_region_obj, 5, 6,
+    oreo_rv565_apply_region
+);
+
 static const mp_rom_map_elem_t oreo_rv565_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__oreo_rv565)},
-    {MP_ROM_QSTR(MP_QSTR_FORMAT_VERSION), MP_ROM_INT(7)},
+    {MP_ROM_QSTR(MP_QSTR_FORMAT_VERSION), MP_ROM_INT(8)},
     {MP_ROM_QSTR(MP_QSTR_inflate_frame),
      MP_ROM_PTR(&oreo_rv565_inflate_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_inflate_delta),
@@ -176,6 +240,8 @@ static const mp_rom_map_elem_t oreo_rv565_module_globals_table[] = {
      MP_ROM_PTR(&oreo_rv565_xor_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_apply_partial),
      MP_ROM_PTR(&oreo_rv565_apply_partial_obj)},
+    {MP_ROM_QSTR(MP_QSTR_apply_region),
+     MP_ROM_PTR(&oreo_rv565_apply_region_obj)},
 };
 static MP_DEFINE_CONST_DICT(
     oreo_rv565_module_globals,

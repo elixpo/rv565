@@ -10,14 +10,17 @@
  * the TFT_eSPI/LovyanGFX examples send; rv565_player_init() rejects other
  * pixel formats with RV565_ERR_UNSUPPORTED.
  *
- * Delta and repeat frames (format version 7): the two frame buffers
+ * Delta and repeat frames (format versions 7 and 8): the two frame buffers
  * ping-pong, so a delta decodes into the buffer that is not on screen with
  * the presented frame as its base, and a repeat decodes nothing and is not
  * sent to the display again. For a partial delta the player sends only the
  * panel rows scaled from its changed lines, through the display's row window
- * (begin_rows); keyframes and full deltas send the whole frame. When the pacer skips frames, the player
- * applies the skipped records it needs (at most K-1 after a keyframe)
- * without displaying them.
+ * (begin_rows). For a region delta (version 8) it sends each changed band's
+ * range as its own window of panel columns and rows (begin_window), merging
+ * bands with the same columns that touch; a display without begin_window
+ * gets the bands' whole rows instead. Keyframes and full deltas send the
+ * whole frame. When the pacer skips frames, the player applies the skipped
+ * records it needs (at most K-1 after a keyframe) without displaying them.
  *
  * Platform ports (port/esp32, port/rp2) implement the two ops tables.
  */
@@ -43,8 +46,15 @@ typedef struct {
     void (*end_frame)(void *ctx);
     /* Optional: start a write of panel rows first_row .. first_row+rows-1,
      * full width (row window and RAMWR); begin_frame must then restore the
-     * full window. NULL makes the player send whole frames only. */
+     * full window. NULL (with begin_window NULL too) makes the player send
+     * whole frames only. */
     void (*begin_rows)(void *ctx, uint16_t first_row, uint16_t rows);
+    /* Optional: start a write of panel columns x .. x+w-1 of rows
+     * y .. y+h-1 (column and row window, then RAMWR); the stripes that follow
+     * hold w pixels per row. begin_frame and begin_rows must then restore the
+     * full column window. Used for region deltas, and for row windows when
+     * begin_rows is NULL. NULL sends region deltas as whole rows. */
+    void (*begin_window)(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 } rv565_display_ops_t;
 
 /* Optional decoder backend. The player always passes prev != dst, so a
@@ -72,12 +82,19 @@ typedef struct {
     uint32_t work_us;     /* frame work on the critical path */
     uint16_t decoded;     /* records decoded on the critical path */
     uint16_t rows_sent;   /* panel rows transferred: panel_height, fewer, or 0 */
+    uint32_t pixels_sent; /* panel pixels transferred (narrower windows send fewer per row) */
 } rv565_frame_stats_t;
 
 /* Changed-line runs the player turns into row windows per frame; a partial
  * delta with more runs is sent whole. */
 #ifndef RV565_PLAYER_MAX_RUNS
 #define RV565_PLAYER_MAX_RUNS 16
+#endif
+/* Changed bands of a region delta the player turns into windows per frame
+ * (12 bytes of stack each); a region delta with more changed bands is sent as
+ * row windows. 32 covers every band of 8-line bands up to 256 lines. */
+#ifndef RV565_PLAYER_MAX_RECTS
+#define RV565_PLAYER_MAX_RECTS 32
 #endif
 /* After a skip of more frames than this, the next frame is sent whole. */
 #ifndef RV565_PLAYER_MAX_CATCHUP
@@ -109,8 +126,8 @@ typedef struct {
 
 /* Validate the configuration and build the scaling maps. Returns
  * RV565_ERR_UNSUPPORTED for pixel formats other than RGB565 big-endian, and
- * RV565_ERR_ARG if the clip has zlib deltas or partial deltas and frames[1]
- * is NULL. */
+ * RV565_ERR_ARG if the clip has zlib deltas, partial or region deltas and
+ * frames[1] is NULL. */
 rv565_status_t rv565_player_init(rv565_player_t *p);
 
 /* Present one source frame and, with a decoder backend, prefetch the next. */

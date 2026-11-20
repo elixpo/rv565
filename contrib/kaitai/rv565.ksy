@@ -35,7 +35,7 @@ seq:
   - id: version
     type: u1
     valid:
-      any-of: [6, 7]
+      any-of: [6, 7, 8]
   - id: width
     type: u2
     valid:
@@ -49,7 +49,7 @@ seq:
     valid:
       min: 1
       max: 60
-    doc: Frames per second, 1-30 in version 6 and 1-60 in version 7.
+    doc: Frames per second, 1-30 in version 6 and 1-60 in versions 7 and 8.
   - id: flags
     type: u1
     doc: None defined; writers write 0 and readers ignore unknown bits.
@@ -59,18 +59,18 @@ seq:
       min: 1
   - id: header_v7
     type: header_v7
-    if: version == 7
+    if: version >= 7
   - id: frames
     type: frame
     repeat: expr
     repeat-expr: num_frames
 instances:
   pixel_format:
-    value: 'version == 7 ? header_v7.pixel_format : pixel_format::rgb565be'
+    value: 'version >= 7 ? header_v7.pixel_format : pixel_format::rgb565be'
   codec:
-    value: 'version == 7 ? header_v7.codec : codec::zlib'
+    value: 'version >= 7 ? header_v7.codec : codec::zlib'
   keyframe_interval:
-    value: 'version == 7 ? header_v7.keyframe_interval : 1'
+    value: 'version >= 7 ? header_v7.keyframe_interval : 1'
   lines:
     value: 'pixel_format == pixel_format::mono_vpage ? (height + 7) / 8 : height'
     doc: |
@@ -107,33 +107,37 @@ types:
         type: u4
         valid:
           min: 1
-        doc: Bytes that follow, the frame type included in version 7.
+        doc: Bytes that follow, the frame type included in versions 7 and 8.
       - id: frame_type
         type: u1
         enum: frame_type
         valid:
           in-enum: true
-        if: _root.version == 7
+        if: _root.version >= 7
       - id: body_zlib
         size: len_body
         process: zlib
-        if: _root.codec == codec::zlib and kind != frame_type::partial and len_body > 0
+        if: _root.codec == codec::zlib and kind != frame_type::partial and kind != frame_type::region and len_body > 0
         doc: |
           Inflated: exactly the frame size of the pixel format, the frame
           (keyframe) or its XOR with the previous frame (delta).
       - id: body_stored
         size: len_body
-        if: _root.codec == codec::stored and kind != frame_type::partial
+        if: _root.codec == codec::stored and kind != frame_type::partial and kind != frame_type::region
         doc: The frame, or its XOR with the previous frame; empty for a repeat.
       - id: body_partial
         size: len_body
         type: partial_delta
         if: kind == frame_type::partial
+      - id: body_region
+        size: len_body
+        type: region_delta
+        if: kind == frame_type::region
     instances:
       len_body:
-        value: '_root.version == 7 ? len_record - 1 : len_record'
+        value: '_root.version >= 7 ? len_record - 1 : len_record'
       kind:
-        value: '_root.version == 7 ? frame_type : frame_type::key'
+        value: '_root.version >= 7 ? frame_type : frame_type::key'
         doc: The frame type; every version 6 frame is a keyframe.
   partial_delta:
     doc: |
@@ -174,6 +178,71 @@ types:
     instances:
       num_bands:
         value: (_root.lines + band_height - 1) / band_height
+  region_delta:
+    doc: |
+      Version 8. Like a partial delta, but each changed band also gives the
+      range of bytes along its lines that changed (x0 to x0 + xw - 1), and
+      only that range has a residual: the prediction (as for a partial
+      delta, from the whole line) XOR the residual. Outside the range, and
+      in unchanged bands, the frame equals the previous one. A range starts
+      and ends on whole pixels (a multiple of 2 bytes for rgb565*, 3 for
+      rgb444, rgb666 and rgb888, 1 otherwise), or ends at the end of the line.
+    meta:
+      bit-endian: le
+    seq:
+      - id: band_height
+        type: u1
+        valid:
+          min: 1
+      - id: mask
+        type: b1
+        repeat: expr
+        repeat-expr: num_bands
+        doc: One bit per band, as in a partial delta.
+      - id: entries
+        type: band_region(mask[_index], band_height)
+        repeat: expr
+        repeat-expr: num_bands
+        doc: A shift and a range for each changed band, in band order.
+      - id: residuals_zlib
+        size-eos: true
+        process: zlib
+        if: _root.codec == codec::zlib
+        doc: Inflated, the residuals of the changed bands' ranges, line by line, concatenated.
+      - id: residuals_stored
+        size-eos: true
+        if: _root.codec == codec::stored
+        doc: The residuals of the changed bands' ranges, line by line, concatenated.
+    instances:
+      num_bands:
+        value: (_root.lines + band_height - 1) / band_height
+  band_region:
+    params:
+      - id: changed
+        type: bool
+      - id: band_height
+        type: u1
+    seq:
+      - id: dx
+        type: s1
+        if: changed
+        doc: Shift along the line, in bytes.
+      - id: dy
+        type: s1
+        if: changed
+        valid:
+          expr: _ > -band_height and _ < band_height
+        doc: Shift across lines, less than the band height either way.
+      - id: x0
+        type: u2le
+        if: changed
+        doc: First byte of the range along each line.
+      - id: xw
+        type: u2le
+        if: changed
+        valid:
+          min: 1
+        doc: Bytes in the range.
   band_shift:
     params:
       - id: changed
@@ -230,3 +299,6 @@ enums:
     1: delta
     2: repeat
     3: partial
+    4:
+      id: region
+      doc: Version 8 only.

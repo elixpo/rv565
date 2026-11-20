@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Check the C library against the conformance vectors in tests/data/v7.
+"""Check the C library against the conformance vectors in tests/data/v7 or v8.
 
 Runs tests/build/test_conformance on every file in manifest.json: valid files
 must open with the listed header and frame types, and every frame must hash
 to the listed SHA-256 when decoded in order (in place, and ping-ponging two
 buffers) and when seeked to on its own, and rv565_changed_lines must report
-the listed runs for every frame. Invalid files must be rejected at the
+the listed runs for every frame (and rv565_changed_rects the listed
+rectangles, where the manifest has them). Invalid files must be rejected at the
 listed stage ("open" or "decode") with the matching status code.
 
-Usage: check_conformance.py <test_conformance binary> [data/v7]
+Usage: check_conformance.py <test_conformance binary> [data/v7 | data/v8]
 """
 import json
 import subprocess
@@ -18,14 +19,14 @@ from pathlib import Path
 PIXEL_FORMATS = ("rgb565be", "rgb565le", "rgb444", "rgb666", "rgb888",
                  "gray8", "gray4", "mono", "mono_vpage")
 CODECS = ("stored", "zlib")
-TYPES = ("key", "delta", "repeat", "partial")
+TYPES = ("key", "delta", "repeat", "partial", "region")
 
 # rv565_status_t for each rejection reason in the manifest.
 STATUS = {
     "magic": -2, "version": -3, "header": -4, "truncated": -5, "trailing": -6,
     "inflate": -7, "pixel_format": -9, "codec": -9, "frame_type": -9,
     "keyframe_interval": -4, "keyframe": -10, "repeat": -11, "stored_size": -11,
-    "partial": -13,
+    "partial": -13, "region": -13,
 }
 
 
@@ -33,7 +34,7 @@ def run(binary, path):
     out = subprocess.run([binary, str(path)], capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"{path.name}: test_conformance exited {out.returncode}: {out.stderr}")
-    result = {"seq": {}, "pp": {}, "seek": {}, "errors": {}, "lines": {}}
+    result = {"seq": {}, "pp": {}, "seek": {}, "errors": {}, "lines": {}, "rects": {}}
     for line in out.stdout.splitlines():
         word, *rest = line.split()
         if word == "open":
@@ -43,6 +44,9 @@ def run(binary, path):
         elif word == "lines":
             result["lines"][int(rest[0])] = [[int(a), int(b)] for a, b in
                                              (x.split(":") for x in rest[1:])]
+        elif word == "rects":
+            result["rects"][int(rest[0])] = [[int(v) for v in x.split(":")] if ":" in x else x
+                                             for x in rest[1:]]
         elif word == "noscratch":
             result["noscratch"] = int(rest[0])
         elif word == "types":
@@ -72,8 +76,13 @@ def check_valid(binary, root, entry):
             problems.append(f"changed lines of frame {i}: {r['lines'].get(i)} != {runs}")
     if "lines" in r["errors"]:
         problems.append(f"changed lines with a small array: {r['errors']['lines']}")
-    zlib_delta = entry["codec"] == "zlib" and (
-        "delta" in entry["frame_types"] or "partial" in entry["frame_types"])
+    for i, rects in enumerate(entry.get("changed_rects", [])):
+        if r["rects"].get(i) != rects:
+            problems.append(f"changed rects of frame {i}: {r['rects'].get(i)} != {rects}")
+    if "rects" in r["errors"]:
+        problems.append(f"changed rects with a small array: {r['errors']['rects']}")
+    zlib_delta = entry["codec"] == "zlib" and any(
+        t in entry["frame_types"] for t in ("delta", "partial", "region"))
     if zlib_delta and r.get("noscratch") != -1:
         problems.append(f"in-place zlib delta without scratch returned {r.get('noscratch')}, expected -1")
     for mode in ("seq", "pp", "seek"):
@@ -118,8 +127,8 @@ def main():
     valid, invalid = len(manifest["valid"]), len(manifest["invalid"])
     if failed:
         sys.exit(f"conformance: {failed} of {valid + invalid} files failed")
-    print(f"conformance: {valid} valid files decode exactly (in order, ping-pong and seek), "
-          f"{invalid} invalid files rejected at the right stage")
+    print(f"conformance ({root.name}): {valid} valid files decode exactly (in order, ping-pong "
+          f"and seek), {invalid} invalid files rejected at the right stage")
 
 
 if __name__ == "__main__":

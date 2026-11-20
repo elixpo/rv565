@@ -10,8 +10,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "circuitpython-rv565"
-description = "Play RV565 video files (format versions 6 and 7) on CircuitPython displays."
-version = "2.0.1"
+description = "Play RV565 video files (format versions 6, 7 and 8) on CircuitPython displays."
+version = "3.0.0"
 readme = "README.rst"
 license = "MIT"
 license-files = ["LICENSE"]

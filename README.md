@@ -16,8 +16,10 @@ header: RGB565 in either byte order, RGB444, RGB666 and RGB888 for colour
 TFTs, 8- and 4-bit grayscale, and 1-bit monochrome in rows (e-paper, memory
 LCDs) or in pages (SSD1306-class OLEDs). Frames are stored or zlib-compressed
 keyframes, exact XOR deltas or repeats, with a keyframe at least every `K`
-frames ([specification](docs/FORMAT.md)). Version 6 files, every frame an
-independent zlib stream of RGB565, still play.
+frames ([specification](docs/FORMAT.md)). Format version 8 (RV565 3.0) adds
+region deltas, which record exactly which part of each band of rows changed,
+so a player sends the display only those pixels, one window per band. Version
+7 and version 6 files still play.
 
 - **24 FPS with zero missed frames** on the ESP32-S3 and the RP2350 (Pico 2),
   measured with version 6: core 1 inflates the next frame while core 0 scales
@@ -27,18 +29,23 @@ independent zlib stream of RGB565, still play.
   paper's two film windows are 2.1–5.5× smaller than in version 6, still
   pixel-exact, and a UI animation is lossless at 6% of MJPEG's size
   ([results](docs/RESULTS_V7.md)).
-- **Only changed rows go to the display**: partial deltas send just the bands
-  that changed. On the Falera Badge (ESP32-S3) that halved the mean frame time
-  of a UI animation, 31.4 → 14.8 ms, and cut film by 12%, with every frame on
-  time ([measurements](docs/RESULTS_V7.md#on-the-badge-esp32-s3)).
+- **Only changed pixels go to the display**: region deltas (version 8) send
+  each changed band's changed range as one window, 2.2–2.6× fewer pixels than
+  version 7's whole rows on UI content and low-motion film. That is as few
+  pixels as a perfect ZMBV player would send, in 4–11× fewer display windows,
+  with files within 6% of ZMBV's ([results](docs/RESULTS_V8.md)). On the
+  Falera Badge (ESP32-S3) the mean frame time of a UI animation goes from
+  31.4 ms for whole frames to 14.8 ms with version 7 and 6.3 ms with
+  version 8, and low-motion film from 27.5 to 16.0 ms, with every frame on
+  time ([measurements](docs/RESULTS_V8.md#on-the-badge-esp32-s3)).
 - **Schedulability from the file alone**: inflate time is linear in the stored
   payload length, so `rv565_check_schedule()` tells you before playback whether
   a clip will keep up.
 - **Fast seeking and local error recovery**: any frame is at most `K` − 1
   records from a keyframe (`K` = 1 makes every frame independent).
 - **Tested without hardware**: every implementation decodes the same
-  conformance files (`tests/data/v7`) in CI and must match each frame's
-  SHA-256.
+  conformance files (`tests/data/v7`, `tests/data/v8`) in CI and must match
+  each frame's SHA-256 and the windows it sends.
 
 The design and measurements are described in
 *RV565: Cross-Layer Co-Design for Frame-Independent Video Playback on
@@ -68,9 +75,11 @@ MicroPython-Class ESP32-S3 Systems*
 
 **What you can rely on**
 
-- **Files keep playing.** Version 7 is covered by the 2.x compatibility
-  promise, and 2.x still plays version 6 files. For players still on 1.x,
-  write version 6 with `rv565 encode --v6` ([specification](docs/FORMAT.md)).
+- **Files keep playing.** Version 8 is covered by the 3.x compatibility
+  promise, and 3.x still plays version 7 and version 6 files. A file is only
+  written as version 8 when it uses region deltas; for players still on 2.x,
+  write version 7 with `rv565 encode --v7`, and for 1.x, version 6 with
+  `--v6` ([specification](docs/FORMAT.md)).
 - **Damaged files are rejected, not drawn.** Readers validate the header and
   every record, and a frame only counts if it decodes to exactly its size.
 - **Verified hardware:** the ESP32-S3 and the RP2350, each with a 320x240
@@ -88,6 +97,7 @@ MicroPython-Class ESP32-S3 Systems*
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Measured: 24 FPS dual-core ([results](docs/RESULTS_RP2350.md); [against MJPEG](docs/RESULTS_MJPEG.md#raspberry-pi-pico-2-rp2350)) |
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Same code as the Pico SDK |
 | RP2040 (Pico) | as RP2350 | Compiles; not yet run on hardware |
+| LVGL 9 (any board) | add `ports/lvgl/lv_rv565.c` ([guide](ports/lvgl/README.md)) | Widget like `lv_gif`; host-tested on LVGL 9.2 and 9.4, not yet run on a board |
 | CircuitPython (ESP32-S3, RP2350, ...) | copy `ports/circuitpython/circuitpython_rv565.py` to `CIRCUITPY/lib` ([guide](ports/circuitpython/README.rst)) | Experimental: pure Python, a few FPS; host-tested, not yet run on a board |
 | Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
 | Browser | [Online converter](https://falera.elixpo.com/rv565/convert/) | No install, no upload |
@@ -166,6 +176,7 @@ python3 tools/rv565.py info clip.rv565      # sizes and predicted late frames
 
 # Other displays: pick the pixel format the panel takes
 python3 tools/rv565.py encode input.mp4 oled.rv565 --size 128x64 --fps 15 --format mono_vpage
+python3 tools/rv565.py encode input.mp4 v7.rv565 --v7   # for players older than 3.0
 python3 tools/rv565.py encode input.mp4 old.rv565 --v6   # for players older than 2.0
 python3 tools/rv565.py c-array clip.rv565 clip.h   # for Arduino sketches
 ```
@@ -238,6 +249,7 @@ examples/            Arduino sketches (ESP32-S3, Pico 2)
 examples_idf/        ESP-IDF example project
 examples_pico/       Pico SDK example project
 ports/circuitpython/ CircuitPython library (experimental, pure Python)
+ports/lvgl/          LVGL 9 widget, lv_rv565
 ports/micropython/   MicroPython user C module
 tools/rv565.py       encoder and inspection CLI
 tests/               host tests and the format conformance check (make -C tests)
@@ -267,6 +279,7 @@ make -C tests                                    # host tests
 make -C tests CLIPS="w90.rv565 w360.rv565"       # plus your own containers
 python3 -m unittest discover -s python/tests     # Python package
 python3 -m unittest discover -s ports/circuitpython/tests   # CircuitPython library
+ports/lvgl/test/run.sh                           # LVGL widget on LVGL 9.2.2 and 9.4.0
 ```
 
 CI builds the Arduino sketches for ESP32-S3 and Pico 2, the ESP-IDF example,
@@ -339,7 +352,7 @@ FaleraOS under MIT.
   [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
-- An `lv_rv565` widget for LVGL, modelled on `lv_gif`:
+- The `lv_rv565` widget ([`ports/lvgl/`](ports/lvgl/README.md)) proposed for LVGL:
   [LVGL forum discussion](https://forum.lvgl.io/t/interest-in-a-lossless-low-ram-video-widget-for-mcus-rv565-like-lv-gif/24490)
 - A proposed article for the Espressif Developer Portal:
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)

@@ -1,6 +1,6 @@
 /* Conformance decoder: open one RV565 file and decode every frame three ways,
  * printing a SHA-256 per frame for tests/check_conformance.py to compare
- * with tests/data/v7/manifest.json:
+ * with tests/data/v7/manifest.json or tests/data/v8/manifest.json:
  *
  *   seq   in order, in place (prev == dst), with a scratch buffer
  *   pp    in order, ping-ponging two buffers (prev != dst), no scratch
@@ -8,9 +8,10 @@
  *
  * Output lines: "open <status>", then on success "header ...", "types ...",
  * "lines <i> <first>:<count> ..." (rv565_changed_lines per frame),
+ * "rects <i> <first>:<count>:<x0>:<xw> ..." (rv565_changed_rects per frame),
  * "<mode> <i> <sha256>" or "<mode>-error <i> <status>", and for a clip with
- * zlib deltas or partial deltas "noscratch <status>" from an in-place decode
- * without scratch.
+ * zlib deltas, partial or region deltas "noscratch <status>" from an in-place
+ * decode without scratch.
  * Usage: test_conformance file.rv565 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,6 +128,27 @@ int main(int argc, char **argv)
             printf("lines-error %u -1\n", i);  /* count not reported with a small array */
         }
     }
+    static rv565_rect_t rects[65536];
+    for (uint16_t i = 0; i < h->frames; ++i) {
+        size_t count = 0, few = 0;
+        const rv565_status_t s = rv565_changed_rects(&clip, i, rects, 65536, &count);
+        printf("rects %u", i);
+        if (s != RV565_OK) printf(" error:%d", (int)s);
+        for (size_t r = 0; r < count; ++r) {
+            printf(" %u:%u:%lu:%lu", rects[r].first, rects[r].count,
+                   (unsigned long)rects[r].x0, (unsigned long)rects[r].xw);
+            /* Every rect is whole pixels: its columns cover exactly its bytes. */
+            uint16_t c0, nc;
+            if (rv565_byte_columns(h->pixel_format, h->width, rects[r].x0, rects[r].xw, &c0, &nc) != RV565_OK ||
+                    nc == 0 || (uint32_t)c0 + nc > h->width) {
+                printf(" columns-error");
+            }
+        }
+        printf("\n");
+        if (count > 1 && (rv565_changed_rects(&clip, i, rects, count - 1, &few) != RV565_ERR_ARG || few != count)) {
+            printf("rects-error %u -1\n", i);  /* count not reported with a small array */
+        }
+    }
 
     /* Odd offsets make the XOR take its bytewise path for one of the runs. */
     uint8_t *a = malloc(fb + 1), *b = malloc(fb + 1), *scratch = malloc(fb);
@@ -144,7 +166,8 @@ int main(int argc, char **argv)
     /* In place without scratch: fine for everything but a zlib delta. */
     for (uint16_t i = 0; i < h->frames; ++i) {
         const int type = rv565_frame_type(&clip, i);
-        if ((type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL) && h->codec == RV565_CODEC_ZLIB) {
+        if ((type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL || type == RV565_FRAME_REGION) &&
+                h->codec == RV565_CODEC_ZLIB) {
             printf("noscratch %d\n", (int)rv565_decode_frame(&clip, i, a, fb));
             break;
         }
