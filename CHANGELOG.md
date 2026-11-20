@@ -50,12 +50,14 @@ version 8, which 2.x readers reject. Write `--v7` (CLI) or `version=7`
   version 8 and FFmpeg's ZMBV on the same frames.
 - **Signatures:** `contrib/file/rv565.magic`, the shared-mime-info entry,
   the Kaitai Struct description and the PRONOM submission describe version 8.
-- **LVGL widget:** `ports/lvgl/`: `lv_rv565`, an LVGL 9 widget that plays RV565 clips,
-  modelled on `lv_gif` (#25). It plays `rgb565le`, `rgb565be` and `gray8`
-  clips from memory or through `lv_fs`, invalidates only the rows a partial
-  delta changes, and supports pause, resume, restart, loop counts and
-  `LV_EVENT_READY`. A host test plays every conformance clip on LVGL 9.2.2
-  and 9.4.0 and checks each frame pixel for pixel; CI runs it.
+- **LVGL widget:** `lv_rv565` in `ports/lvgl/`, an LVGL 9 widget that plays
+  RV565 clips, modelled on `lv_gif` (#25). It plays `rgb565le`, `rgb565be`
+  and `gray8` clips from memory or through `lv_fs`, invalidates only the
+  rows a partial delta changes and only the rectangles a region delta
+  changes, and supports pause, resume, restart, loop counts and
+  `LV_EVENT_READY`. A host test plays every version 7 and 8 conformance
+  clip on LVGL 9.2.2 and 9.4.0, checks each frame pixel for pixel and the
+  areas each region delta invalidates; CI runs it.
 
 ## 2.0.1 — 2026-11-19
 

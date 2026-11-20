@@ -241,16 +241,56 @@ static uint8_t * read_file(const char * path, size_t * size)
     return buf;
 }
 
+/* Swap the two bytes of every pixel in bytes lo .. hi - 1 (both even) of
+ * rows first .. first + count - 1. */
+static void swap_span(lv_rv565_t * p, uint32_t first, uint32_t count, size_t lo, size_t hi)
+{
+    for(uint32_t y = first; y < first + count; y++) {
+        uint8_t * b = p->frame + (size_t) y * p->row_bytes;
+        for(size_t j = lo; j < hi; j += 2) {
+            uint8_t t = b[j];
+            b[j] = b[j + 1];
+            b[j + 1] = t;
+        }
+    }
+}
+
 /* Swap the two bytes of every pixel in rows first .. first + count - 1. */
 static void swap_rows(lv_rv565_t * p, uint32_t first, uint32_t count)
 {
-    uint8_t * b = p->frame + (size_t) first * p->row_bytes;
-    uint8_t * end = b + (size_t) count * p->row_bytes;
-    for(; b < end; b += 2) {
-        uint8_t t = b[0];
-        b[0] = b[1];
-        b[1] = t;
+    swap_span(p, first, count, 0, p->row_bytes);
+}
+
+/* For a region delta whose rects (one per changed band, in band order) are
+ * known: the bytes of each band's lines the delta reads or writes, as
+ * lo[k] .. hi[k] - 1, even. A band writes its range x0 .. x0 + xw - 1 and
+ * reads, from the previous frame, bytes j - dx of lines in the same band
+ * (FORMAT.md, "Region delta"), i.e. max(0, x0 - dx) .. min(R, x0 + xw - dx) - 1;
+ * the span is the hull of both. Returns false if the body doesn't match the
+ * rects (not reached for a clip rv565_open accepted). */
+static bool region_spans(lv_rv565_t * p, uint32_t i, const rv565_rect_t * rects, size_t n,
+                         uint16_t * lo, uint16_t * hi)
+{
+    const uint8_t * body;
+    uint32_t len;
+    if(rv565_payload(&p->clip, (uint16_t) i, &body, &len) != RV565_OK || len < 1 || body[0] == 0) return false;
+    uint32_t lines = p->clip.header.height;
+    uint32_t bands = (lines + body[0] - 1) / body[0];
+    size_t entries = 1 + (bands + 7) / 8;
+    if(len < entries + 6 * n) return false;
+    long r = (long) p->row_bytes;
+    for(size_t k = 0; k < n; k++) {
+        const uint8_t * e = body + entries + 6 * k;
+        long dx = (int8_t) e[0];
+        long x0 = e[2] | (e[3] << 8), xw = e[4] | (e[5] << 8);
+        if(x0 != (long) rects[k].x0 || xw != (long) rects[k].xw) return false;
+        long a = LV_MIN(x0, x0 - dx), b = LV_MAX(x0 + xw, x0 + xw - dx);
+        a = LV_MAX(a, 0);
+        b = LV_MIN(b, r);
+        lo[k] = (uint16_t)(a & ~1L);
+        hi[k] = (uint16_t)((b + 1) & ~1L);
     }
+    return true;
 }
 
 static bool load(lv_rv565_t * p, const void * src)
@@ -325,7 +365,7 @@ static bool load(lv_rv565_t * p, const void * src)
     if(h.codec == RV565_CODEC_ZLIB) {
         for(uint32_t i = 0; i < h.frames; i++) {
             int t = rv565_frame_type(&p->clip, (uint16_t) i);
-            if(t == RV565_FRAME_DELTA || t == RV565_FRAME_PARTIAL) {
+            if(t == RV565_FRAME_DELTA || t == RV565_FRAME_PARTIAL || t == RV565_FRAME_REGION) {
                 p->scratch_len = p->frame_len;
                 p->scratch = lv_malloc(p->scratch_len);
                 if(p->scratch == NULL) {
@@ -382,39 +422,70 @@ static bool decode_frame(lv_rv565_t * p, uint32_t i, bool invalidate)
     rv565_line_run_t runs[MAX_RUNS];
     size_t nruns = 0;
     bool all_rows = true;
-    if(type == RV565_FRAME_PARTIAL &&
+    if((type == RV565_FRAME_PARTIAL || type == RV565_FRAME_REGION) &&
        rv565_changed_lines(&p->clip, (uint16_t) i, runs, MAX_RUNS, &nruns) == RV565_OK) {
         all_rows = false;
     }
 
+    /* Region delta: one rectangle per changed band. */
+    rv565_rect_t rects[LV_RV565_MAX_RECTS];
+    size_t nrects = 0;
+    bool have_rects = type == RV565_FRAME_REGION &&
+                      rv565_changed_rects(&p->clip, (uint16_t) i, rects, LV_RV565_MAX_RECTS, &nrects) == RV565_OK;
+
     /* rgb565be on older LVGL: the frame is held swapped for drawing; a delta
-     * applies to the clip's own byte order, so swap the rows it touches back. */
-    if(p->swap && (type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL)) {
-        if(all_rows) swap_rows(p, 0, p->clip.header.height);
-        else for(size_t r = 0; r < nruns; r++) swap_rows(p, runs[r].first, runs[r].count);
-    }
-
-    rv565_status_t st = rv565_decode(&p->clip, (uint16_t) i, p->frame, p->frame, p->frame_len,
-                                     p->scratch, p->scratch_len);
-    if(st != RV565_OK) {
-        p->error = st;
-        return false;
-    }
-
-    if(p->swap && type != RV565_FRAME_REPEAT) {
-        if(all_rows) swap_rows(p, 0, p->clip.header.height);
-        else for(size_t r = 0; r < nruns; r++) swap_rows(p, runs[r].first, runs[r].count);
+     * applies to the clip's own byte order, so swap back the bytes it reads
+     * or writes before decoding, and swap them again afterwards. For a region
+     * delta that is each band's span (region_spans), else the changed rows
+     * (a band's prediction never leaves its band), else the whole frame. */
+    bool delta = type == RV565_FRAME_DELTA || type == RV565_FRAME_PARTIAL || type == RV565_FRAME_REGION;
+    uint16_t lo[LV_RV565_MAX_RECTS], hi[LV_RV565_MAX_RECTS];
+    bool spans = p->swap && have_rects && region_spans(p, i, rects, nrects, lo, hi);
+    for(int pass = 0; pass < 2; pass++) {
+        if(pass == 1) {
+            rv565_status_t st = rv565_decode(&p->clip, (uint16_t) i, p->frame, p->frame, p->frame_len,
+                                             p->scratch, p->scratch_len);
+            if(st != RV565_OK) {
+                p->error = st;
+                return false;
+            }
+        }
+        if(!p->swap || type == RV565_FRAME_REPEAT || (pass == 0 && !delta)) continue;
+        if(spans)
+            for(size_t k = 0; k < nrects; k++) swap_span(p, rects[k].first, rects[k].count, lo[k], hi[k]);
+        else if(!all_rows)
+            for(size_t r = 0; r < nruns; r++) swap_rows(p, runs[r].first, runs[r].count);
+        else
+            swap_rows(p, 0, p->clip.header.height);   /* keyframe, delta, or too many runs */
     }
 
     if(!invalidate || type == RV565_FRAME_REPEAT) return true;
     lv_image_cache_drop(&p->imgdsc);
     lv_area_t content;
-    if(!all_rows && rows_map_1to1(p, &content)) {
-        for(size_t r = 0; r < nruns; r++) {
-            lv_area_t a = content;
-            a.y1 = content.y1 + runs[r].first;
-            a.y2 = a.y1 + runs[r].count - 1;
-            lv_obj_invalidate_area(obj, &a);
+    if((have_rects || !all_rows) && rows_map_1to1(p, &content)) {
+        if(have_rects) {
+            for(size_t k = 0; k < nrects; k++) {
+                uint16_t c0, nc;
+                if(rv565_byte_columns(p->clip.header.pixel_format, p->clip.header.width,
+                                      rects[k].x0, rects[k].xw, &c0, &nc) != RV565_OK) {
+                    lv_obj_invalidate(obj);   /* not reached: rv565_open checked the ranges */
+                    return true;
+                }
+                lv_area_t a;
+                a.x1 = content.x1 + c0;
+                a.x2 = a.x1 + nc - 1;
+                a.y1 = content.y1 + rects[k].first;
+                a.y2 = a.y1 + rects[k].count - 1;
+                lv_obj_invalidate_area(obj, &a);
+            }
+        }
+        else {
+            for(size_t r = 0; r < nruns; r++) {
+                lv_area_t a = content;
+                a.y1 = content.y1 + runs[r].first;
+                a.y2 = a.y1 + runs[r].count - 1;
+                lv_obj_invalidate_area(obj, &a);
+            }
         }
     }
     else {

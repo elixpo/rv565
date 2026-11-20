@@ -12,13 +12,16 @@ ROOT=$(cd "$HERE/../../.." && pwd)
 BUILD="$HERE/build"
 CC=${CC:-cc}
 VERSIONS=${*:-"v9.2.2 v9.4.0"}
-DATA="$ROOT/tests/data/v7"
+DATA="$ROOT/tests/data"
 
-# Every valid conformance clip: the supported formats are checked frame by
-# frame, the others must be refused.
-CLIPS=$(ls "$DATA"/*.rv565 | grep -v '/invalid_' | tr '\n' ' ')
-
+# Every valid conformance clip of format versions 7 and 8: the supported
+# formats are checked frame by frame, the others must be refused. Plus
+# larger region-delta clips written by make_clips.py (more rectangles than
+# LV_RV565_MAX_RECTS, and bands shifted sideways).
 mkdir -p "$BUILD"
+python3 -I "$HERE/make_clips.py" "$BUILD/clips"
+CLIPS=$(ls "$DATA"/v7/*.rv565 "$DATA"/v8/*.rv565 "$BUILD"/clips/*.rv565 | grep -v '/invalid_' | tr '\n' ' ')
+
 for v in $VERSIONS; do
     L="$BUILD/lvgl-$v"
     if [ ! -d "$L" ]; then

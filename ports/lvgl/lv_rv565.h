@@ -7,8 +7,9 @@
  * frame is an inflate and nothing else, and it is lossless. The widget is an
  * lv_image whose image descriptor points at one decoded frame; a timer at
  * the clip's frame rate decodes the next frame into it in place. For version
- * 7 partial deltas it invalidates only the bands of lines that changed, so
- * LVGL redraws and flushes just those rows.
+ * 7 partial deltas it invalidates only the bands of lines that changed, and
+ * for version 8 region deltas only each changed band's rectangle, so LVGL
+ * redraws and flushes just those areas.
  *
  * Supported pixel formats:
  *   rgb565le -> LV_COLOR_FORMAT_RGB565
@@ -59,6 +60,15 @@ extern "C" {
  */
 #ifndef LV_RV565_MAX_CATCHUP
 #define LV_RV565_MAX_CATCHUP 4
+#endif
+
+/**
+ * The most rectangles of a region delta (format version 8) the widget
+ * invalidates one by one; a frame with more invalidates the whole widget.
+ * Each costs 12 bytes of stack while a frame is decoded.
+ */
+#ifndef LV_RV565_MAX_RECTS
+#define LV_RV565_MAX_RECTS 32
 #endif
 
 extern const lv_obj_class_t lv_rv565_class;
