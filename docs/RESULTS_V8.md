@@ -94,7 +94,8 @@ above. Each number is the mean per frame over passes 2-4 of the clip
 **Frame work** is the time on the critical path per frame: with dual-core
 playback core 1 inflates the next frame while core 0 sends this one, and on
 one core the two add up. Every run presented all 240 frames of every pass on
-time at 24 FPS (41.67 ms), with none late or skipped.
+time at 24 FPS (41.67 ms), with none late or skipped, and the picture on the
+panel showed no stale columns, misplaced bands or artefacts after keyframes.
 
 - **The SPI transfer, which dominates the frame, falls 2.4× on the UI clip
   and 1.7× on the low-motion film.** The badge sends exactly the pixels the

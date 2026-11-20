@@ -48,7 +48,7 @@ try:
 except ImportError:  # boards without long integers
     _monotonic_ns = None
 
-__version__ = "2.0.1"
+__version__ = "3.0.0"
 __repo__ = "https://github.com/elixpo/rv565.git"
 
 MAGIC = b"RV5"

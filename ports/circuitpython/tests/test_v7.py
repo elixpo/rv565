@@ -252,7 +252,7 @@ class ConformanceTest(unittest.TestCase):
             rv565.frame_size("rgb332", 1, 1)
 
     def test_version(self):
-        self.assertEqual(rv565.__version__, "2.0.1")
+        self.assertEqual(rv565.__version__, "3.0.0")
 
 
 def expected_rgb(item, frame):

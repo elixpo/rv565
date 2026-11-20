@@ -44,9 +44,9 @@
 extern "C" {
 #endif
 
-#define RV565_VERSION_MAJOR 2
+#define RV565_VERSION_MAJOR 3
 #define RV565_VERSION_MINOR 0
-#define RV565_VERSION_PATCH 1
+#define RV565_VERSION_PATCH 0
 
 #define RV565_CONTAINER_V6     6
 #define RV565_CONTAINER_V7     7

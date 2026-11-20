@@ -33,7 +33,7 @@ __all__ = [
     "rgb888_to_rgb565be", "rgb565be_to_rgb888",
 ]
 
-__version__ = "2.0.1"
+__version__ = "3.0.0"
 
 MAGIC = b"RV5"
 VERSION = 7

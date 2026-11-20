@@ -3,6 +3,54 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## 3.0.0 — unreleased
+
+Version 3.0.0 introduces RV565 format version 8 (`docs/FORMAT.md`): a new
+frame type, the **region delta** (type 4). Like a partial delta it stores
+only the bands of rows that changed, each with a shift, but each band also
+gives the byte range of its lines that changed, so a player decodes and
+sends to the display only that rectangle. On the Falera Badge (ESP32-S3,
+ST7789 at 40 MHz) the SPI transfer of a UI animation falls from 14.8 to
+6.2 ms per frame against version 7, and of low-motion film from 27.5 to
+15.8 ms, with every frame on time (`docs/RESULTS_V8.md`). A file is written
+as version 8 only when it holds a region delta; every reader accepts
+versions 6, 7 and 8, and a region delta in a version 7 file is invalid.
+
+The major version changes because files written by default can now be
+version 8, which 2.x readers reject. Write `--v7` (CLI) or `version=7`
+(Python) for players still on 2.x.
+
+- **Format:** region delta body = band height, band mask, 6 bytes per changed
+  band (dx, dy, first byte, byte count), then each range's residual through
+  the codec. Ranges start and end on whole pixels (2 bytes for `rgb565*`,
+  3 for `rgb444`/`rgb666`/`rgb888`, 1 otherwise) or at the line's end.
+- **Conformance vectors** in `tests/data/v8` (24 valid, 12 invalid), written
+  and checked by `tools/make_conformance.py`; every implementation is tested
+  against them in CI alongside `tests/data/v7`.
+- **C library:** `rv565_rect_t`, `rv565_changed_rects()` (the windows a frame
+  needs, without decoding), `rv565_region_rects()`, `rv565_region_runs()`,
+  `rv565_apply_region()`, `rv565_byte_columns()` (byte range to pixel
+  columns), `rv565_pixel_align()`, `RV565_FRAME_REGION`, `RV565_CONTAINER_V8`.
+  `RV565_ERR_PARTIAL` now also covers invalid region deltas.
+- **Player:** a `begin_window(x, y, w, h)` display operation; with it, region
+  deltas are sent as one window per changed band (bands with the same columns
+  that touch share one), up to `RV565_PLAYER_MAX_RECTS` (32) bands, else as row
+  windows. `rv565_frame_stats_t.pixels_sent` reports the panel pixels sent.
+  The ESP32 and RP2 ports and the LovyanGFX and TFT_eSPI examples implement
+  `begin_window`; `rv565_st7789_columns()` builds the column address command.
+- **MicroPython module:** `apply_region()`, and `FORMAT_VERSION` is 8.
+- **Python package and CLI:** the encoder writes region deltas when they
+  help (not when every range is the full line), `Clip.changed_rects()`,
+  `FRAME_TYPES` includes `"region"`, `rv565 encode --v7`, and `rv565 info`
+  reports region frames and the share of pixels and windows sent.
+- **CircuitPython library:** region deltas, `changed_rects()`,
+  `dirty_rects()`, `columns()`, and windowed `Player`/`DirectPlayer` writes.
+- **Benchmarks and tools:** `benchmarks/esp32s3_v7_player` reports pixels
+  sent and region frames; `tools/compare_zmbv.py` compares version 7,
+  version 8 and FFmpeg's ZMBV on the same frames.
+- **Signatures:** `contrib/file/rv565.magic`, the shared-mime-info entry,
+  the Kaitai Struct description and the PRONOM submission describe version 8.
+
 ## 2.0.1 — 2026-11-19
 
 Documentation only; the format, encoder, decoders and players are unchanged.
