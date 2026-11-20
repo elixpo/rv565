@@ -3,7 +3,7 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
-## 3.0.0 — unreleased
+## 3.0.0 — 2026-11-20
 
 Version 3.0.0 introduces RV565 format version 8 (`docs/FORMAT.md`): a new
 frame type, the **region delta** (type 4). Like a partial delta it stores
