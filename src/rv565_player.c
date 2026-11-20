@@ -124,14 +124,14 @@ static uint16_t row_for_line(const rv565_player_t *p, uint32_t line)
 /* Region delta shown right after the frame on the panel: send each changed
  * band's range as one window of panel columns and rows; bands whose windows
  * have the same columns and touch merge. Returns 0 (nothing sent) when the
- * frame has more bands than RV565_PLAYER_MAX_RUNS. */
+ * frame has more bands than RV565_PLAYER_MAX_RECTS. */
 static int present_region(rv565_player_t *p, uint16_t index, const uint8_t *frame,
                           rv565_frame_stats_t *s)
 {
     const rv565_header_t *h = &p->clip->header;
-    rv565_rect_t rects[RV565_PLAYER_MAX_RUNS];
+    rv565_rect_t rects[RV565_PLAYER_MAX_RECTS];
     size_t count;
-    if (rv565_changed_rects(p->clip, index, rects, RV565_PLAYER_MAX_RUNS, &count) != RV565_OK) {
+    if (rv565_changed_rects(p->clip, index, rects, RV565_PLAYER_MAX_RECTS, &count) != RV565_OK) {
         return 0;
     }
     uint16_t pend_x0 = 0, pend_x1 = 0, pend_first = 0, pend_end = 0;

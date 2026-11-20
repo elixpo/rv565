@@ -85,11 +85,16 @@ typedef struct {
     uint32_t pixels_sent; /* panel pixels transferred (narrower windows send fewer per row) */
 } rv565_frame_stats_t;
 
-/* Changed-line runs (or region delta bands) the player turns into windows
- * per frame; a partial delta with more runs is sent whole, and a region delta
- * with more bands is sent as row windows. */
+/* Changed-line runs the player turns into row windows per frame; a partial
+ * delta with more runs is sent whole. */
 #ifndef RV565_PLAYER_MAX_RUNS
 #define RV565_PLAYER_MAX_RUNS 16
+#endif
+/* Changed bands of a region delta the player turns into windows per frame
+ * (12 bytes of stack each); a region delta with more changed bands is sent as
+ * row windows. 32 covers every band of 8-line bands up to 256 lines. */
+#ifndef RV565_PLAYER_MAX_RECTS
+#define RV565_PLAYER_MAX_RECTS 32
 #endif
 /* After a skip of more frames than this, the next frame is sent whole. */
 #ifndef RV565_PLAYER_MAX_CATCHUP

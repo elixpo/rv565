@@ -131,14 +131,24 @@ enum { FULL, ROWS_ONLY, ROWS_AND_COLUMNS, COLUMNS_ONLY, MODES };
 static const char *const MODE_NAMES[MODES] = {
     "full writes", "row windows", "row and column windows", "column windows only" };
 
+/* A region delta the player sends as column windows: it has at most
+ * RV565_PLAYER_MAX_RECTS changed bands and the display has begin_window. */
+static int region_windows(const rv565_clip_t *clip, uint16_t i, int mode)
+{
+    static rv565_rect_t rects[4096];
+    size_t n;
+    return mode >= ROWS_AND_COLUMNS && rv565_frame_type(clip, i) == RV565_FRAME_REGION &&
+           rv565_changed_rects(clip, i, rects, 4096, &n) == RV565_OK && n <= RV565_PLAYER_MAX_RECTS;
+}
+
 /* Panel rows a sequential present of frame i must send. */
-static unsigned rows_expected(const rv565_clip_t *clip, uint16_t i, int windows)
+static unsigned rows_expected(const rv565_clip_t *clip, uint16_t i, int mode)
 {
     static rv565_line_run_t runs[4096];
     size_t n;
     if (rv565_changed_lines(clip, i, runs, 4096, &n) != RV565_OK) return 9999;
     if (n == 0) return 0;
-    if (!windows || n > RV565_PLAYER_MAX_RUNS) return PH;
+    if (mode == FULL || (n > RV565_PLAYER_MAX_RUNS && !region_windows(clip, i, mode))) return PH;
     uint16_t ymap[PH];
     rv565_build_map(ymap, clip->header.height, PH);
     unsigned rows = 0;
@@ -158,10 +168,8 @@ static unsigned long pixels_expected(const rv565_clip_t *clip, uint16_t i, int m
     static rv565_rect_t rects[4096];
     size_t n;
     *max_windows = 0;
-    const int region = rv565_frame_type(clip, i) == RV565_FRAME_REGION;
-    if (!region || mode < ROWS_AND_COLUMNS ||
-            rv565_changed_rects(clip, i, rects, 4096, &n) != RV565_OK || n > RV565_PLAYER_MAX_RUNS) {
-        return (unsigned long)rows_expected(clip, i, mode != FULL) * PW;
+    if (!region_windows(clip, i, mode) || rv565_changed_rects(clip, i, rects, 4096, &n) != RV565_OK) {
+        return (unsigned long)rows_expected(clip, i, mode) * PW;
     }
     uint16_t xmap[PW], ymap[PH];
     rv565_build_map(xmap, clip->header.width, PW);
@@ -226,6 +234,9 @@ static rv565_frame_stats_t present_checked(rv565_player_t *p, const rv565_clip_t
 
 static unsigned long total_rows, partial_rows, partial_frames;
 static unsigned long region_frames, region_pixels, region_row_pixels;
+/* Region deltas with more changed bands than RV565_PLAYER_MAX_RUNS, sent as
+ * column windows (the badge's 180x135 film clip has 17 bands of 8 lines). */
+static unsigned long many_band_frames;
 
 static void run(const rv565_clip_t *clip, int overlap, int two, int windows)
 {
@@ -248,7 +259,7 @@ static void run(const rv565_clip_t *clip, int overlap, int two, int windows)
         column_windows = writes = 0;
         const rv565_frame_stats_t fs = present_checked(&p, clip, i, mode);
         const unsigned rows = fs.rows_sent;
-        const unsigned want = i == 0 ? PH : rows_expected(clip, i, windows != FULL);
+        const unsigned want = i == 0 ? PH : rows_expected(clip, i, windows);
         if (rows != want) FAIL("%s: frame %u sent %u rows, expected %u", mode, i, rows, want);
         unsigned max_windows;
         const unsigned long pixels = i == 0 ? (unsigned long)PW * PH : pixels_expected(clip, i, windows, &max_windows);
@@ -267,6 +278,11 @@ static void run(const rv565_clip_t *clip, int overlap, int two, int windows)
             ++region_frames;
             region_pixels += fs.pixels_sent;
             region_row_pixels += (unsigned long)rows * PW;
+            static rv565_rect_t rects[4096];
+            size_t nr;
+            if (rv565_changed_rects(clip, i, rects, 4096, &nr) == RV565_OK &&
+                    nr > RV565_PLAYER_MAX_RUNS && nr <= RV565_PLAYER_MAX_RECTS && column_windows > 0)
+                ++many_band_frames;
         }
     }
 
@@ -484,10 +500,14 @@ int main(int argc, char **argv)
     if (region_frames == 0 || region_pixels >= region_row_pixels)
         FAIL("region deltas did not save pixels over row windows (%lu of %lu over %lu frames)",
              region_pixels, region_row_pixels, region_frames);
+    if (many_band_frames == 0)
+        FAIL("no region delta with %d-%d changed bands was sent as column windows",
+             RV565_PLAYER_MAX_RUNS + 1, RV565_PLAYER_MAX_RECTS);
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     fprintf(stderr, "player checks passed on %d clip(s) (serial 1/2 buffers, overlap; full writes, row windows, "
             "row and column windows, column windows only); partial deltas sent %lu of %lu panel rows; "
-            "region deltas sent %lu of the %lu pixels their rows hold\n", clips, partial_rows,
-            partial_frames * PH, region_pixels, region_row_pixels);
+            "region deltas sent %lu of the %lu pixels their rows hold (%lu with more than %d bands)\n",
+            clips, partial_rows, partial_frames * PH, region_pixels, region_row_pixels,
+            many_band_frames, RV565_PLAYER_MAX_RUNS);
     return 0;
 }
