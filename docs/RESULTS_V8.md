@@ -74,9 +74,57 @@ are counted at their clipped size.
   on UI and low-motion film at 320x240, 0.1% on high-motion film), because a
   band's residual covers only its changed range.
 
-Not measured here: frame time on a device. That needs a player for each
-format on the same board and display; `benchmarks/esp32s3_v7_player` is the
-starting point for RV565.
+## On the badge (ESP32-S3)
+
+Measured 2026-11-20 with `benchmarks/esp32s3_v7_player` on the Falera Badge:
+ESP32-S3 at 240 MHz, a 2.0" 320x240 ST7789 on 40 MHz SPI, ESP-IDF 5.5.1. The
+clips are 180x135 and the player scales them to the whole 320x240 panel, so
+pixel shares are of the panel. They come from `tools/rv565.py encode` with its
+defaults (rgb565be, 8-line bands), so their sizes differ from the tables
+above. Each number is the mean per frame over passes 2-4 of the clip
+(they agree to 0.01 ms); pass 1 includes start-up.
+
+| Clip | Format | Size | Pixels sent | SPI transfer | Frame work, dual-core / one core | Decode |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| UI | RV565 version 7 | 163,301 B | 44.3% | 14.82 ms | 14.84 / 16.60 ms | 1.76 ms |
+| UI | **RV565 version 8** | **134,517 B** | **17.1%** | **6.23 ms** | **6.27 / 7.55 ms** | **1.29 ms** |
+| W90 | RV565 version 7 | 1,338,918 B | 86.9% | 27.47 ms | 27.51 / 31.12 ms | **3.63 ms** |
+| W90 | **RV565 version 8** | **1,274,329 B** | **42.5%** | **15.78 ms** | **15.96 / 19.82 ms** | 3.99 ms |
+
+**Frame work** is the time on the critical path per frame: with dual-core
+playback core 1 inflates the next frame while core 0 sends this one, and on
+one core the two add up. Every run presented all 240 frames of every pass on
+time at 24 FPS (41.67 ms), with none late or skipped.
+
+- **The SPI transfer, which dominates the frame, falls 2.4× on the UI clip
+  and 1.7× on the low-motion film.** The badge sends exactly the pixels the
+  file says changed (17.1% and 42.5% of the panel), so the host measurements
+  above carry over to the device.
+- **Extra windows cost little.** A full panel takes 31.4 ms (a keyframe), so
+  the pixels alone account for 5.4 ms (UI) and 13.3 ms (film); the windows add
+  about 0.9 and 2.4 ms per frame. The slowest film frame, with nearly every
+  band changed in its own window, takes 33.2 ms against 31.4 ms for a whole
+  frame.
+- **Decoding is cheap next to the transfer:** 1.3-4 ms against 6-28 ms.
+  Region deltas decode faster than version 7 on the UI clip (less residual)
+  and 10% slower on film (each band's range is placed separately).
+
+Not measured here: ZMBV on the same badge. That needs a ZMBV player with the
+same display path; as above, its 16x16 blocks would mean 4-11× more windows.
+
+Reproduce (the badge on `$PORT`; each run flashes only the app partition):
+
+```bash
+python3 tools/make_ui_clip.py ui.mkv
+python3 tools/rv565.py encode ui.mkv ui_v8.rv565
+python3 tools/rv565.py encode ui.mkv ui_v7.rv565 --v7
+python3 tools/rv565.py encode big_buck_bunny_480p_h264.mov w90_v8.rv565 --start 90 --seconds 10
+python3 tools/rv565.py encode big_buck_bunny_480p_h264.mov w90_v7.rv565 --start 90 --seconds 10 --v7
+for c in ui_v7 ui_v8 w90_v7 w90_v8; do
+    benchmarks/esp32s3_v7_player/run.sh $PWD/$c.rv565 1 $PORT   # dual-core
+    benchmarks/esp32s3_v7_player/run.sh $PWD/$c.rv565 0 $PORT   # one core
+done
+```
 
 ## Reproduce
 
