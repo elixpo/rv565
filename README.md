@@ -97,6 +97,7 @@ MicroPython-Class ESP32-S3 Systems*
 | RP2350 (Pico 2), Pico SDK | `add_subdirectory(rv565)` | Measured: 24 FPS dual-core ([results](docs/RESULTS_RP2350.md); [against MJPEG](docs/RESULTS_MJPEG.md#raspberry-pi-pico-2-rp2350)) |
 | RP2350 (Pico 2), Arduino-Pico | Library Manager → *RV565* | Same code as the Pico SDK |
 | RP2040 (Pico) | as RP2350 | Compiles; not yet run on hardware |
+| LVGL 9 (any board) | add `ports/lvgl/lv_rv565.c` ([guide](ports/lvgl/README.md)) | Widget like `lv_gif`; host-tested on LVGL 9.2 and 9.4, not yet run on a board |
 | CircuitPython (ESP32-S3, RP2350, ...) | copy `ports/circuitpython/circuitpython_rv565.py` to `CIRCUITPY/lib` ([guide](ports/circuitpython/README.rst)) | Experimental: pure Python, a few FPS; host-tested, not yet run on a board |
 | Desktop (Python 3.9+) | `pip install rv565` ([PyPI](https://pypi.org/project/rv565/)) | Encode, inspect, verify; Pillow plugin |
 | Browser | [Online converter](https://falera.elixpo.com/rv565/convert/) | No install, no upload |
@@ -248,6 +249,7 @@ examples/            Arduino sketches (ESP32-S3, Pico 2)
 examples_idf/        ESP-IDF example project
 examples_pico/       Pico SDK example project
 ports/circuitpython/ CircuitPython library (experimental, pure Python)
+ports/lvgl/          LVGL 9 widget, lv_rv565
 ports/micropython/   MicroPython user C module
 tools/rv565.py       encoder and inspection CLI
 tests/               host tests and the format conformance check (make -C tests)
@@ -277,6 +279,7 @@ make -C tests                                    # host tests
 make -C tests CLIPS="w90.rv565 w360.rv565"       # plus your own containers
 python3 -m unittest discover -s python/tests     # Python package
 python3 -m unittest discover -s ports/circuitpython/tests   # CircuitPython library
+ports/lvgl/test/run.sh                           # LVGL widget on LVGL 9.2.2 and 9.4.0
 ```
 
 CI builds the Arduino sketches for ESP32-S3 and Pico 2, the ESP-IDF example,
@@ -349,7 +352,7 @@ FaleraOS under MIT.
   [kaitai_struct_formats #803](https://github.com/kaitai-io/kaitai_struct_formats/pull/803)
 - Pico SDK documentation of the SPI inter-frame gap found while porting:
   [pico-sdk #3285](https://github.com/raspberrypi/pico-sdk/pull/3285)
-- An `lv_rv565` widget for LVGL, modelled on `lv_gif`:
+- The `lv_rv565` widget ([`ports/lvgl/`](ports/lvgl/README.md)) proposed for LVGL:
   [LVGL forum discussion](https://forum.lvgl.io/t/interest-in-a-lossless-low-ram-video-widget-for-mcus-rv565-like-lv-gif/24490)
 - A proposed article for the Espressif Developer Portal:
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)

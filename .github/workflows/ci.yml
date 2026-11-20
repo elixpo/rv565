@@ -175,3 +175,11 @@ jobs:
               -DRV565_OVERLAP=$overlap -DRV565_VIDEO=$PWD/tests/data/testpattern.rv565
             cmake --build build-bench-$overlap -j
           done
+
+  lvgl:
+    name: LVGL widget (lv_rv565 on LVGL 9.2 and 9.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build lv_rv565 against LVGL 9.2.2 and 9.4.0 and play every conformance clip
+        run: ports/lvgl/test/run.sh v9.2.2 v9.4.0
