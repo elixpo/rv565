@@ -327,8 +327,9 @@ FaleraOS under MIT.
 - Detected by `file(1)`: the magic entry was committed upstream
   ([bugs.astron.com #822](https://bugs.astron.com/view.php?id=822)) and ships
   in the next `file` release
-- Listed in [Awesome Raspberry Pi](https://github.com/thibmaek/awesome-raspberry-pi#projects)
-  and [Awesome CircuitPython](https://github.com/adafruit/awesome-circuitpython)
+- Listed in [Awesome Raspberry Pi](https://github.com/thibmaek/awesome-raspberry-pi#projects),
+  [Awesome CircuitPython](https://github.com/adafruit/awesome-circuitpython) and
+  [Awesome MicroPython](https://github.com/mcauser/awesome-micropython)
 
 **Written about**
 
@@ -356,9 +357,8 @@ FaleraOS under MIT.
   [LVGL forum discussion](https://forum.lvgl.io/t/interest-in-a-lossless-low-ram-video-widget-for-mcus-rv565-like-lv-gif/24490)
 - A proposed article for the Espressif Developer Portal:
   [developer-portal discussion #852](https://github.com/espressif/developer-portal/discussions/852)
-- Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67),
-  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92) and
-  [awesome-micropython #235](https://github.com/mcauser/awesome-micropython/pull/235)
+- Lists: [awesome-esp #67](https://github.com/agucova/awesome-esp/pull/67) and
+  [Awesome-Embedded #92](https://github.com/nhivp/Awesome-Embedded/pull/92)
 
 Using RV565 in a project? Tell us in
 [Show and tell](https://github.com/elixpo/elixpo/discussions/categories/show-and-tell)
