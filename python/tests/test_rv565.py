@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python" / "src"))
@@ -347,6 +348,34 @@ class RegionDeltaTests(unittest.TestCase):
         _, clip = self._clip([bytes(a), bytes(b)])
         self.assertEqual(list(clip), [bytes(a), bytes(b)])
         self.assertEqual(clip.frame_type(1), "region")
+
+    def test_numpy_and_python_band_search_encode_identically(self):
+        try:
+            import numpy
+        except ImportError:
+            self.skipTest("NumPy is optional")
+
+        for fmt in rv565.PIXEL_FORMATS:
+            with self.subTest(fmt=fmt):
+                lines, line_bytes = rv565.frame_lines(fmt, self.W, self.H)
+                step, _ = rv565._shift_steps(fmt, 8)
+                original = bytearray(lines * line_bytes)
+                for y in range(min(lines, 8)):
+                    for x in range(step, max(step + 1, line_bytes // 2)):
+                        original[y * line_bytes + x] = (3 * x + 5 * y) & 0xFF
+                shifted = bytearray(len(original))
+                for y in range(1, min(lines, 8)):
+                    row = (y - 1) * line_bytes
+                    shifted[y * line_bytes + step:(y + 1) * line_bytes] = original[row:row + line_bytes - step]
+                frames = [bytes(original), bytes(shifted)]
+                for version, kind in ((7, "partial"), (8, "region")):
+                    with self.subTest(version=version):
+                        fast, clip = self._clip(frames, fmt=fmt, version=version, codec="stored")
+                        with patch.dict(sys.modules, {"numpy": None}):
+                            slow, _ = self._clip(frames, fmt=fmt, version=version, codec="stored")
+                        self.assertEqual(clip.frame_type(1), kind)
+                        self.assertEqual(fast, slow)
+                        self.assertEqual(list(clip), frames)
 
     def _region_file(self, entries, data, version=8):
         """A 32x16 rgb565be stored clip: a black keyframe, then one region
