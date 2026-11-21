@@ -3,6 +3,14 @@
 All notable changes to RV565 are listed here. The project follows
 [semantic versioning](https://semver.org).
 
+## Unreleased
+
+- Python encoder: frames with lines wider than 65535 bytes (for example,
+  more than 32767 px of `rgb565be`) no longer fail with a `struct.error`
+  when the changed range can't fit a region delta's 16-bit `x0`/`xw`
+  fields; that frame falls back to a partial delta, a delta or a keyframe.
+  Found in review of the FFmpeg encoder, which had the same limit.
+
 ## 3.0.0 — 2026-11-20
 
 Version 3.0.0 introduces RV565 format version 8 (`docs/FORMAT.md`): a new

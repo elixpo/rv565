@@ -641,6 +641,11 @@ def _region_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565
             continue
         rows = end - first
         x0, xw = _changed_range(cur, old, rows, line_bytes, align)
+        # x0 and xw are stored as unsigned 16-bit fields. A range that does
+        # not fit (lines wider than 65535 bytes) can't be a region delta; the
+        # caller falls back to a partial delta or a keyframe.
+        if x0 > 0xFFFF or xw > 0xFFFF:
+            return None
         mask[b >> 3] |= 1 << (b & 7)
         cur_c = _crop(cur, rows, line_bytes, x0, xw)
         best = _xor(cur_c, _crop(old, rows, line_bytes, x0, xw))
