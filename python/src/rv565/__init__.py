@@ -543,12 +543,16 @@ def _alternating(limit, step=1):
         yield k
 
 
-def _nonzero(data):
-    return len(data) - data.count(0)
+def _residual_and_cost(cur, old, np):
+    if np is None:
+        residual = _xor(cur, old)
+        return residual, len(residual) - residual.count(0)
+    residual = np.bitwise_xor(np.frombuffer(cur, np.uint8), np.frombuffer(old, np.uint8))
+    return residual.tobytes(), np.count_nonzero(residual)
 
 
 def _partial_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565be",
-                  motion_range=0):
+                  motion_range=0, *, np=None):
     """Body of a partial delta (None if no band changed or the band height
     does not fit in a byte). With a motion range, each changed band gets the
     first shift (in the documented search order) with the fewest nonzero
@@ -568,15 +572,15 @@ def _partial_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb56
         if cur == prev[lo:hi]:
             continue
         mask[b >> 3] |= 1 << (b & 7)
-        best = _xor(cur, prev[lo:hi])
-        best_cost, best_shift = _nonzero(best), (0, 0)
+        best, best_cost = _residual_and_cost(cur, prev[lo:hi], np)
+        best_shift = (0, 0)
         if best_cost and (max_dx or max_dy):
             for dy in _alternating(min(max_dy, end - first - 1)):
                 for dx in _alternating(max_dx, step):
                     if dx == 0 and dy == 0:
                         continue
-                    res = _xor(cur, _predict(prev, first, end, line_bytes, dx, dy))
-                    cost = _nonzero(res)
+                    predicted = _predict(prev, first, end, line_bytes, dx, dy)
+                    res, cost = _residual_and_cost(cur, predicted, np)
                     if cost < best_cost:
                         best, best_cost, best_shift = res, cost, (dx, dy)
                         if cost == 0:
@@ -590,24 +594,31 @@ def _partial_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb56
     return bytes((band,)) + bytes(mask) + bytes(shifts) + _encode(b"".join(parts), codec, level)
 
 
-def _changed_range(cur, old, rows, line_bytes, align):
+def _changed_range(cur, old, rows, line_bytes, align, np=None):
     """(x0, xw): the bytes of a band's lines that differ, widened to whole
     pixels, or None if none do."""
-    lo, hi = line_bytes, -1
-    for r in range(rows):
-        a = cur[r * line_bytes:(r + 1) * line_bytes]
-        b = old[r * line_bytes:(r + 1) * line_bytes]
-        if a == b:
-            continue
-        i = 0
-        while a[i] == b[i]:
-            i += 1
-        j = line_bytes - 1
-        while a[j] == b[j]:
-            j -= 1
-        lo, hi = min(lo, i), max(hi, j)
-    if hi < 0:
-        return None
+    if np is None:
+        lo, hi = line_bytes, -1
+        for r in range(rows):
+            a = cur[r * line_bytes:(r + 1) * line_bytes]
+            b = old[r * line_bytes:(r + 1) * line_bytes]
+            if a == b:
+                continue
+            i = 0
+            while a[i] == b[i]:
+                i += 1
+            j = line_bytes - 1
+            while a[j] == b[j]:
+                j -= 1
+            lo, hi = min(lo, i), max(hi, j)
+        if hi < 0:
+            return None
+    else:
+        changed = np.frombuffer(cur, np.uint8) != np.frombuffer(old, np.uint8)
+        columns = np.flatnonzero(changed.reshape(rows, line_bytes).any(axis=0))
+        if not columns.size:
+            return None
+        lo, hi = int(columns[0]), int(columns[-1])
     x0 = lo - lo % align
     x1 = min(line_bytes, hi + 1 + (-(hi + 1)) % align)
     return x0, x1 - x0
@@ -618,7 +629,7 @@ def _crop(data, rows, line_bytes, x0, xw):
 
 
 def _region_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565be",
-                 motion_range=0):
+                 motion_range=0, *, np=None):
     """Body of a region delta (None if no band changed or the band height
     does not fit in a byte): like a partial delta, but each changed band
     stores only the range of bytes along its lines that changed. With a
@@ -640,7 +651,7 @@ def _region_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565
         if cur == old:
             continue
         rows = end - first
-        x0, xw = _changed_range(cur, old, rows, line_bytes, align)
+        x0, xw = _changed_range(cur, old, rows, line_bytes, align, np)
         # x0 and xw are stored as unsigned 16-bit fields. A range that does
         # not fit (lines wider than 65535 bytes) can't be a region delta; the
         # caller falls back to a partial delta or a keyframe.
@@ -648,16 +659,15 @@ def _region_body(frame, prev, lines, line_bytes, band, codec, level, fmt="rgb565
             return None
         mask[b >> 3] |= 1 << (b & 7)
         cur_c = _crop(cur, rows, line_bytes, x0, xw)
-        best = _xor(cur_c, _crop(old, rows, line_bytes, x0, xw))
-        best_cost, best_shift = _nonzero(best), (0, 0)
+        best, best_cost = _residual_and_cost(cur_c, _crop(old, rows, line_bytes, x0, xw), np)
+        best_shift = (0, 0)
         if best_cost and (max_dx or max_dy):
             for dy in _alternating(min(max_dy, rows - 1)):
                 for dx in _alternating(max_dx, step):
                     if dx == 0 and dy == 0:
                         continue
                     pred = _predict(prev, first, end, line_bytes, dx, dy)
-                    res = _xor(cur_c, _crop(pred, rows, line_bytes, x0, xw))
-                    cost = _nonzero(res)
+                    res, cost = _residual_and_cost(cur_c, _crop(pred, rows, line_bytes, x0, xw), np)
                     if cost < best_cost:
                         best, best_cost, best_shift = res, cost, (dx, dy)
                         if cost == 0:
@@ -723,6 +733,12 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
         raise RV565Error("keyframe interval must be 1-255")
     if not 0 <= tolerance <= 255:
         raise RV565Error("tolerance must be 0-255")
+    np = None
+    if band_lines and keyframe_interval > 1:
+        try:
+            import numpy as np
+        except ImportError:
+            pass
     prev = None
     for i, frame in enumerate(frames):
         frame = bytes(frame)
@@ -740,12 +756,12 @@ def encode_frames(frames, width, height, level=1, pixel_format="rgb565be", codec
                 options.append((DELTA, _encode(_xor(frame, prev), codec, level)))
             if band_lines:
                 partial = _partial_body(frame, prev, lines, line_bytes, band_lines, codec, level,
-                                        fmt, motion_range)
+                                        fmt, motion_range, np=np)
                 if partial is not None:
                     options.append((PARTIAL, partial))
                 if regions:
                     region = _region_body(frame, prev, lines, line_bytes, band_lines, codec,
-                                          level, fmt, motion_range)
+                                          level, fmt, motion_range, np=np)
                     if region is not None:
                         options.append((REGION, region))
             # The smallest body, except that a region delta, then a partial
