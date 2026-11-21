@@ -369,6 +369,19 @@ class RegionDeltaTests(unittest.TestCase):
         self.assertEqual(f[8 * 64:8 * 64 + 4], bytes(4))
         self.assertEqual(clip.changed_rects(1), [(8, 8, 4, 6)])
 
+    def test_wide_lines_fall_back_from_region(self):
+        # 32769 px of rgb565be is 65538 bytes a line: a change in the last
+        # pixel has x0 = 65536, which a region delta can't store. The encoder
+        # must fall back and still round-trip losslessly.
+        w = 32769
+        f0 = bytes(2 * w)
+        f1 = f0[:-2] + b"\xf8\x00"
+        buf = io.BytesIO()
+        rv565.write(buf, w, 1, 24, [f0, f1], keyframe_interval=10)
+        clip = rv565.open(buf.getvalue())
+        self.assertEqual(clip.frame(1), f1)
+        self.assertNotEqual(clip.frame_type(1), 4)
+
     def test_invalid_regions_are_rejected(self):
         cases = {
             "misaligned start": [(0, 0, 3, 6)],
