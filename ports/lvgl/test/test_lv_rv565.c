@@ -323,6 +323,38 @@ static void test_loop_pause_file(const char * dir)
     tick_ms += 90; refresh();
     CHECK(lv_rv565_get_frame(o) == f + 1, "resume: on frame %u", (unsigned) lv_rv565_get_frame(o));
 
+    /* Auto-pause off (the default): a hidden player keeps going. */
+    CHECK(!lv_rv565_get_auto_pause_invisible(o), "auto-pause on by default");
+    f = lv_rv565_get_frame(o);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    tick_ms += 90; refresh();
+    CHECK(lv_rv565_get_frame(o) == f + 1, "hidden, auto-pause off: on frame %u", (unsigned) lv_rv565_get_frame(o));
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+
+    /* Auto-pause on: hidden, the frame holds; shown again, it carries on from
+     * that frame without catching up on the time it was hidden. */
+    lv_rv565_set_auto_pause_invisible(o, true);
+    CHECK(lv_rv565_get_auto_pause_invisible(o), "auto-pause didn't switch on");
+    tick_ms += 90; refresh();
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    f = lv_rv565_get_frame(o);
+    for(int i = 0; i < 10; i++) { tick_ms += 90; refresh(); }
+    CHECK(lv_rv565_get_frame(o) == f, "auto-paused: moved from %u to %u", (unsigned) f, (unsigned) lv_rv565_get_frame(o));
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+    tick_ms += 90; refresh();         /* the first visible tick resets the clock */
+    tick_ms += 90; refresh();
+    CHECK(lv_rv565_get_frame(o) == f + 1, "after auto-pause: on frame %u, wanted %u",
+          (unsigned) lv_rv565_get_frame(o), (unsigned) f + 1);
+
+    /* Out of view (moved off the screen) counts as invisible too. */
+    f = lv_rv565_get_frame(o);
+    lv_obj_set_pos(o, -2000, 0);
+    lv_obj_update_layout(o);          /* a move takes effect at the next layout update */
+    for(int i = 0; i < 5; i++) { tick_ms += 90; refresh(); }
+    CHECK(lv_rv565_get_frame(o) == f, "off screen: moved from %u to %u", (unsigned) f, (unsigned) lv_rv565_get_frame(o));
+    lv_obj_set_pos(o, 0, 0);
+    lv_rv565_set_auto_pause_invisible(o, false);
+
     /* Falling far behind decodes at most LV_RV565_MAX_CATCHUP frames per call. */
     lv_rv565_restart(o);
     refresh();
@@ -339,7 +371,7 @@ static void test_loop_pause_file(const char * dir)
     CHECK(!lv_rv565_is_loaded(o) && lv_rv565_get_error(o) == RV565_ERR_TRAILING,
           "invalid clip: loaded=%d error=%d", lv_rv565_is_loaded(o), (int) lv_rv565_get_error(o));
     lv_obj_delete(o);
-    printf("  ok file source, loop count, pause/resume/restart, catch-up, refusals\n");
+    printf("  ok file source, loop count, pause/resume/restart, auto-pause, catch-up, refusals\n");
 }
 
 int main(int argc, char ** argv)

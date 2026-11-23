@@ -5,6 +5,11 @@ All notable changes to RV565 are listed here. The project follows
 
 ## Unreleased
 
+- LVGL widget: `lv_rv565_set_auto_pause_invisible()` holds the current
+  frame while the widget can't be seen (hidden, scrolled or clipped out of
+  view) and carries on from it when it can, without catching up on the time
+  it was away. Off by default, as in `lv_gif`. Tested against LVGL 9.2.2 and
+  9.4.0.
 - Python encoder: frames with lines wider than 65535 bytes (for example,
   more than 32767 px of `rgb565be`) no longer fail with a `struct.error`
   when the changed range can't fit a region delta's 16-bit `x0`/`xw`
