@@ -99,6 +99,16 @@ void lv_rv565_resume(lv_obj_t * obj);
 void lv_rv565_restart(lv_obj_t * obj);
 
 /**
+ * Hold the current frame while the object can't be seen (hidden, or scrolled
+ * or clipped out of view), and carry on from it when it can, without
+ * catching up on the time it was away. Off by default, as in lv_gif.
+ */
+void lv_rv565_set_auto_pause_invisible(lv_obj_t * obj, bool auto_pause);
+
+/** Whether auto-pause while invisible is on. */
+bool lv_rv565_get_auto_pause_invisible(lv_obj_t * obj);
+
+/**
  * Play the clip `count` times, then stop on its last frame and send
  * LV_EVENT_READY. LV_RV565_LOOP_FOREVER (0) loops for ever; LV_EVENT_READY
  * is then sent at the end of every pass.

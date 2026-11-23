@@ -62,6 +62,8 @@ typedef struct {
     int32_t error;
     uint32_t loaded : 1;
     uint32_t swap : 1;    /* rgb565be clip on LVGL without RGB565_SWAPPED */
+    uint32_t auto_pause : 1;  /* hold the frame while the object can't be seen */
+    uint32_t hidden : 1;      /* auto-paused: not visible at the last tick */
 } lv_rv565_t;
 
 /**********************
@@ -139,6 +141,25 @@ void lv_rv565_restart(lv_obj_t * obj)
     if(!decode_frame(p, 0, true)) return;
     p->cur = 0;
     lv_rv565_resume(obj);
+}
+
+void lv_rv565_set_auto_pause_invisible(lv_obj_t * obj, bool auto_pause)
+{
+    LV_ASSERT_OBJ(obj, MY_CLASS);
+    lv_rv565_t * p = (lv_rv565_t *) obj;
+    p->auto_pause = auto_pause;
+    if(!auto_pause && p->hidden) {
+        /* Carry on from the held frame, not from where the clock got to. */
+        p->hidden = 0;
+        p->base = p->cur;
+        p->t0 = lv_tick_get();
+    }
+}
+
+bool lv_rv565_get_auto_pause_invisible(lv_obj_t * obj)
+{
+    LV_ASSERT_OBJ(obj, MY_CLASS);
+    return ((lv_rv565_t *) obj)->auto_pause;
 }
 
 void lv_rv565_set_loop_count(lv_obj_t * obj, int32_t count)
@@ -499,6 +520,23 @@ static void next_frame_cb(lv_timer_t * t)
     lv_obj_t * obj = lv_timer_get_user_data(t);
     lv_rv565_t * p = (lv_rv565_t *) obj;
     if(!p->loaded) return;
+
+    /* Auto-pause: decode nothing while the object can't be seen (hidden, or
+     * scrolled or clipped out of view); once it can, carry on from the held
+     * frame rather than catching up on the time it was away. The timer keeps
+     * running, so this needs nothing from the application. */
+    if(p->auto_pause) {
+        if(!lv_obj_is_visible(obj)) {
+            p->hidden = 1;
+            return;
+        }
+        if(p->hidden) {
+            p->hidden = 0;
+            p->base = p->cur;
+            p->t0 = lv_tick_get();
+            return;
+        }
+    }
 
     uint32_t frames = p->clip.header.frames;
     uint32_t fps = p->clip.header.fps;

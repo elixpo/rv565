@@ -96,6 +96,7 @@ card.
 | `lv_rv565_set_src(obj, src)` | Load a clip and play it from frame 0. `src` is an `lv_image_dsc_t` whose `data`/`data_size` are the `.rv565` file's bytes, or a path for LVGL's file system (read into RAM whole). |
 | `lv_rv565_pause(obj)` / `lv_rv565_resume(obj)` | Pause on the current frame; resume from it. |
 | `lv_rv565_restart(obj)` | Back to frame 0 and play. |
+| `lv_rv565_set_auto_pause_invisible(obj, on)` / `lv_rv565_get_auto_pause_invisible(obj)` | Hold the frame while the widget can't be seen (hidden, scrolled or clipped out of view) and carry on from it when it can, without catching up. Off by default, as in `lv_gif`. |
 | `lv_rv565_set_loop_count(obj, n)` | Play `n` times, then stop on the last frame; `LV_RV565_LOOP_FOREVER` (0, the default) loops for ever. |
 | `lv_rv565_get_loop_count(obj)` | Passes left. |
 | `lv_rv565_is_loaded(obj)` | Whether a clip loaded. |
@@ -123,6 +124,6 @@ checks each frame on screen against an independent decode, pixel for pixel,
 on both the `RGB565_SWAPPED` path (9.4) and the swapped-buffer path (9.2).
 It checks that partial deltas flush only the rows they change, and that a
 region delta invalidates exactly its rectangles (or the whole widget past
-the limit) and flushes nothing outside them. It also checks looping and `LV_EVENT_READY`, pause, resume, restart,
+the limit) and flushes nothing outside them. It also checks looping and `LV_EVENT_READY`, pause, resume, restart, auto-pause while hidden,
 catch-up, loading through `lv_fs`, and that unsupported and invalid clips
 are refused. CI runs it on every push.
