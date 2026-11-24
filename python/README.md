@@ -18,6 +18,9 @@ Prefer not to install anything? The
 [online converter](https://falera.elixpo.com/rv565/convert/) does the same
 encoding in your browser.
 
+If NumPy is installed, the encoder uses it to speed up partial and region
+delta searches. Both paths produce the same encoded bytes.
+
 ## Command line
 
 ```bash
